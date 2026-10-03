@@ -29,7 +29,6 @@ FormicBox es un simulador 2D en vista superior, al estilo *WorldBox*, donde el *
 | Recursos | Pasto y *bocadillo* (super-recurso). La colonia crece según la comida recolectada. |
 | HUD | Botones, sliders (viento, evaporación) y gráficas en tiempo real. |
 
-Detalle de las reglas del autómata: ver [`docs/reglas.md`](docs/reglas.md) *(por completar por el Grupo 1)*.
 
 ## 3. Fundamentación biológica (hormigas *Atta*)
 
@@ -41,43 +40,8 @@ Puntos a cubrir:
 - Depredadores y amenazas (marabuntas *Eciton*, fuego, inundación) y su justificación en el modelo.
 - Cómo se traducen estos datos a parámetros (velocidad, evaporación, daño del fuego).
 
-## 4. Arquitectura del proyecto
 
-```
-formicbox/
-├── src/
-│   ├── main.py            # Bucle principal (Grupo 4)
-│   ├── input_handler.py   # Modo Dios: clics -> celdas (Grupo 4)
-│   ├── config.py          # Constantes globales
-│   ├── world/             # Grilla, feromonas, fuego, viento (Grupo 1)
-│   ├── agents/            # Hormigas y máquina de estados (Grupo 2)
-│   └── ui/                # Render, sprites y HUD (Grupo 3)
-├── assets/                # Sprites pixel art (Grupo 3)
-├── docs/                  # Reglas, decisiones y bibliografía
-├── tests/
-├── CONTRIBUTING.md        # Flujo de ramas y commits
-└── requirements.txt
-```
-
-## 5. Instalación y ejecución
-
-Requisitos: **Python 3.10+**.
-
-```bash
-git clone https://github.com/<ORGANIZACION_O_USUARIO>/formicbox.git
-cd formicbox
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-python -m src.main
-```
-
-- **Clic** sobre el mapa: imprime en consola las coordenadas `(X, Y)` de la celda.
-- **Esc** o cerrar la ventana: salir.
-
-Pruebas: `python -m pytest`
-
-## 6. Equipo y organización
+## 4. Equipo y organización
 
 | Subgrupo | Responsabilidad | Integrantes |
 |---|---|---|
@@ -88,7 +52,7 @@ Pruebas: `python -m pytest`
 
 
 
-## 7. Hoja de ruta
+## 5. Hoja de ruta
 
 - [ ] **Semana 1 – Esqueleto:** matriz, agente base, ventana gráfica, repo y detección de clics.
 - [ ] Feromonas (difusión/evaporación) y seguimiento de rastros.
@@ -96,7 +60,7 @@ Pruebas: `python -m pytest`
 - [ ] HUD completo y generación procedural.
 - [ ] Balanceo, documentación y entrega (**14–15 de noviembre de 2026**).
 
-## 8. Referencias
+## 6. Referencias
 
 Referencias base (**verificar y completar antes de la entrega**):
 
@@ -107,4 +71,3 @@ Referencias base (**verificar y completar antes de la entrega**):
 5. Wolfram, S. (2002). *A New Kind of Science*. Wolfram Media.
 6. _(Añadir aquí artículos sobre *Atta* en Colombia/Santander y sobre *Eciton*.)_
 
-## 9. Licencia
