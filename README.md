@@ -108,5 +108,3 @@ Referencias base (**verificar y completar antes de la entrega**):
 6. _(Añadir aquí artículos sobre *Atta* en Colombia/Santander y sobre *Eciton*.)_
 
 ## 9. Licencia
-
-Por definir (proyecto académico).
