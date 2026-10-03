@@ -86,7 +86,7 @@ Pruebas: `python -m pytest`
 | 3 | Pixel art, gráficos y HUD | Ángel, David |
 | 4 | Integración, Modo Dios, balanceo y documentación | Nikollas, Samuel |
 
-Flujo de trabajo y convenciones: [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 
 ## 7. Hoja de ruta
 
