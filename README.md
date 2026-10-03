@@ -107,4 +107,3 @@ Referencias base (**verificar y completar antes de la entrega**):
 5. Wolfram, S. (2002). *A New Kind of Science*. Wolfram Media.
 6. _(Añadir aquí artículos sobre *Atta* en Colombia/Santander y sobre *Eciton*.)_
 
-## 9. Licencia
