@@ -255,21 +255,8 @@ El jugador interviene el ambiente, no las hormigas:
 
 ## Instalación y uso
 
-> 🚧 *Completa esta sección con los datos de tu implementación.*
 
-```bash
-# Clonar el repositorio
-git clone https://github.com/<usuario>/formicbox.git
-cd formicbox
-
-# Instalar dependencias
-# <comando de instalación>
-
-# Ejecutar
-# <comando de ejecución>
-```
-
-**Requisitos:** `<lenguaje / versión / librerías>`
+**Requisitos:** ``
 
 ## Documentación
 
@@ -277,8 +264,8 @@ El diseño científico y técnico completo está en [`FormicBox_Documento_Tecnic
 
 ## Autores
 
-`<nombres del equipo>` — *Autómatas y Lenguajes Formales*, `<universidad / semestre>`
+`<nombres del equipo>` — *Autómatas y Lenguajes Formales*, `Uis`
 
 ## Licencia
 
-`<licencia, p. ej. MIT>`
+``
