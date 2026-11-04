@@ -18,9 +18,8 @@ class CellularAutomaton:
         self.terrain = Terrain(width, height, seed)
         self.terrain.generate()
 
-        # Gradient field (distancia al nido)
-        self.home_field, self.home_dist = Terrain.nest_gradient_field(self.terrain.matrix, NEST, (DIRT,))
-        self.outbound_field = np.where(np.isfinite(self.home_dist), 1.0 - self.home_field, 0.0).astype(np.float32)
+        # Rebuilding when a rock or water is put down
+        self.rebuilt_gradient()
 
         self.objects = EnvironmentObjects(width, height, seed)
         self.objects.spawn_resources(self.terrain.matrix)
@@ -36,6 +35,48 @@ class CellularAutomaton:
         }
 
         self.tick_counter = 0
+
+    def rebuilt_gradient (self):
+        """Rehace home_dist, home_field y outbound_field a partir de terrain.matrix actual.
+        Llamarlo tras cambiar roca o agua (place_terrain ya lo hace). Tambien lo usa __init__."""
+        # Gradient field (distancia al nido)
+        self.home_field, self.home_dist = Terrain.nest_gradient_field(
+            self.terrain.matrix, NEST, (DIRT,)
+        )
+
+        self.outbound_field = np.where(
+            np.isfinite(self.home_dist), 1.0 - self.home_field, 0.0
+        ).astype(np.float32)
+
+    def place_terrain(self, y, x, kind):
+        """Pone DIRT, ROCK o WATER en (y, x) y deja todo coherente (Funcion para el grupo 4).
+        Devuelve False si no se pudo: fuera del mapa, tipo invalido o la celda es el nido."""
+        if kind not in (DIRT, ROCK, WATER):
+            return False
+        if not (0 <= y < self.height and 0 <= x < self.width):
+            return False
+        if self.terrain.matrix[y, x] == NEST:
+            return False
+        if self.terrain.matrix[y, x] == kind:
+            return True
+        self.terrain.matrix[y, x] = kind
+
+        if kind != DIRT:
+            # Lo que haya en la celda desaparece: objetos, fuego y feromona
+            cell = np.zeros((self.height, self.width), dtype=bool)
+            cell[y, x] = True
+            self.objects.clear_mask(cell)
+            self.fire.matrix[y, x] = NO_FIRE
+            self.fire.age[y, x] = 0
+            for layer in self.pheromones.values():
+                layer.matrix[y, x] = 0.0
+                layer.added[y, x] = 0.0
+
+        # La humedad depende del agua: se recalcula desde cero
+        self.terrain.moisture.fill(0.0)
+        self.terrain._calculate_static_moisture()
+        self.rebuilt_gradient()
+        return True
 
     def deposit_pheromone(self, name, y, x, amount):
         """API para los agentes: deja feromona en una celda (se aplica en el próximo update)."""
