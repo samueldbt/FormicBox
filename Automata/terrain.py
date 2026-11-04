@@ -14,8 +14,17 @@ class Terrain(Grid):
         self.moisture = np.zeros((height, width), dtype=np.float32)
         self.nest_pos = config.NEST
 
-    def generate(self, rock_density=0.40, water_density=0.38, nest_radius=3):
-        """Generates procedural terrain ensuring connectivity and proper nest placement."""
+    def generate(self, rock_density=None, water_density=None, nest_radius=3):
+        """Generates procedural terrain ensuring connectivity and proper nest placement.
+
+        If rock_density / water_density are None, config.ROCK_DENSITY and
+        config.WATER_DENSITY are used.
+        """
+        if rock_density is None:
+            rock_density = config.ROCK_DENSITY
+        if water_density is None:
+            water_density = config.WATER_DENSITY
+
         water_mask = self.generate_spots(water_density) > 0
         rock_mask = self.generate_spots(rock_density) > 0
         

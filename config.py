@@ -3,8 +3,8 @@
 # World Settings
 SEED = 1
 WIDTH = 110
-HEIGHT = 20
-NEST = None  # If None, the procedural generator will pick a random valid spot
+HEIGHT = 20                  # minimo recomendado: 12 (el nido necesita margen y el mango se ubica entre las filas 5 y HEIGHT-5)
+NEST = None                  # (fila, columna) = (y, x). Si es None, el generador elige un punto valido
 
 # Global Wind
 WIND_X = 0.0
@@ -17,6 +17,10 @@ PHEROMONE_SUGAR = (0.02, 0.10)
 PHEROMONE_ALARM = (0.15, 0.25)
 PHEROMONE_HUNT = (0.30, 0.05)
 
+# Terrain Densities (generación inicial del mapa)
+ROCK_DENSITY = 0.40
+WATER_DENSITY = 0.38
+
 # Fire Parameters
 FIRE_BASE_PROB = 0.25
 FIRE_WIND_C = 0.5
@@ -24,7 +28,7 @@ ASH_TICKS = 20               # ticks que dura la ceniza antes de volver a tierra
 
 # Resource Densities (generación inicial)
 GRASS_DENSITY = 0.5
-MANGO_DENSITY = 0.15
+MANGO_DENSITY = 0.30         # con 0.15 casi no habia mango (mediana 2); rango probado 0.25-0.30
 
 # Regeneración lenta. None = el máximo es lo que haya al generar el mapa
 GRASS_MAX = None             # máximo de celdas con pasto
@@ -33,6 +37,9 @@ GRASS_SPROUT_INTERVAL = 20   # cada cuántos ticks puede brotar pasto (solo si e
 GRASS_SPROUT_COUNT = 3       # brotes máximos por intervalo
 GRASS_MATURE_PROB = 1 / 60   # prob. por tick de que un brote (nivel 1) se vuelva tupido (nivel 2)
 MANGO_SPROUT_INTERVAL = 60
+
+# Colonia: el hongo pasa a ESTRESADO cuando los bocadillos entregados superan este umbral
+U_AZUCAR = 10
 
 # Ya no se usa para la ceniza (ahora es ASH_TICKS); se deja por compatibilidad
 MOISTURE_THRESHOLD = 0.40
