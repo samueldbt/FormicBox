@@ -85,8 +85,8 @@ DEPOSIT_AMOUNT_BOCADILLO = 5.0
 DEPOSIT_AMOUNT_DEATH_ALARM = 40.0   # alarma que deja una hormiga (no marabunta) al morir
 
 # Población y tiempo
-NUM_WORKERS = 40
-NUM_SOLDIERS = 6
+#NUM_WORKERS = 40
+#NUM_SOLDIERS = 6
 SPAWN_PER_TICK = 2           # hormigas que salen del nido por tick
 SWARM_SIZE = 10              # tamaño del enjambre del botón de depuración
 CORPSE_TICKS = 1             # ticks que un cadáver estorba
