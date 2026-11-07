@@ -28,8 +28,8 @@ class CellularAutomaton:
         self.colony = Colony()
 
         self.pheromones = {
-            "vegetal": PheromoneLayer(width, height, *config.PHEROMONE_VEGETAL),
-            "azucar": PheromoneLayer(width, height, *config.PHEROMONE_SUGAR),
+            "vegetal": PheromoneLayer(width, height, *config.PHEROMONE_VEGETAL, mode="max"),
+            "azucar": PheromoneLayer(width, height, *config.PHEROMONE_SUGAR, mode="max"),
             "alarma": PheromoneLayer(width, height, *config.PHEROMONE_ALARM),
             "caza": PheromoneLayer(width, height, *config.PHEROMONE_HUNT)
         }

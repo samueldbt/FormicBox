@@ -12,7 +12,7 @@ WIND_Y = 0.0
 WIND_STEP = 1.0   # intensidad que aplican los botones de viento
 
 # Pheromone Parameters: (evaporation_rate, diffusion_rate)
-PHEROMONE_VEGETAL = (0.01, 0.15)
+PHEROMONE_VEGETAL = (0.03, 0.08)
 PHEROMONE_SUGAR = (0.02, 0.10)
 PHEROMONE_ALARM = (0.15, 0.25)
 PHEROMONE_HUNT = (0.30, 0.05)
