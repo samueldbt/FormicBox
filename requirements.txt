@@ -1,0 +1,1 @@
+debe tener instalado antes de poder ejecutar el main.py las librerias: pygame | numpy
