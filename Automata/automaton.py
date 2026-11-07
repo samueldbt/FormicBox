@@ -1,6 +1,7 @@
 import numpy as np
 import config
 from .grid import Grid
+from .scenario import get_scenario
 from .terrain import Terrain, DIRT, ROCK, WATER, NEST
 from .objects import EnvironmentObjects, NONE, GRASS, MANGO, BOCADILLO
 from .pheromone import PheromoneLayer
@@ -9,20 +10,32 @@ from .colony import Colony
 
 
 class CellularAutomaton:
-    def __init__(self, width=config.WIDTH, height=config.HEIGHT, seed=config.SEED):
-        """Coordinates and instantiates Terrain, Objects, Pheromones, Fire and Colony."""
+    def __init__(self, width=config.WIDTH, height=config.HEIGHT, seed=config.SEED, scenario=None):
+        """Coordinates and instantiates Terrain, Objects, Pheromones, Fire and Colony.
+        scenario=None -> random generator. scenario="corridor" (id) or a Scenario -> prebuilt map."""
         self.width = width
         self.height = height
         self.grid = Grid(width, height)
 
-        self.terrain = Terrain(width, height, seed)
-        self.terrain.generate()
+        self.scenario = get_scenario(scenario) if scenario is not None else None
+        if self.scenario is not None:
+            seed = self.scenario.seed            # semilla fija del escenario
+            t, o, m = self.scenario.build(width, height)
 
-        # Rebuilding when a rock or water is put down
+        self.terrain = Terrain(width, height, seed)
+        if self.scenario is None:
+            self.terrain.generate()
+        else:
+            self.terrain.matrix = t.astype(self.terrain.matrix.dtype)
+            self.terrain.moisture = m
+
         self.rebuilt_gradient()
 
         self.objects = EnvironmentObjects(width, height, seed)
-        self.objects.spawn_resources(self.terrain.matrix)
+        if self.scenario is None:
+            self.objects.spawn_resources(self.terrain.matrix)
+        else:
+            self.objects.matrix = o.astype(self.objects.matrix.dtype)
 
         self.fire = FireLayer(width, height, seed)
         self.colony = Colony()
@@ -35,6 +48,31 @@ class CellularAutomaton:
         }
 
         self.tick_counter = 0
+    
+    def _disk(self, y, x, radius):
+        """Máscara booleana de un círculo de celdas."""
+        yy, xx = np.ogrid[:self.height, :self.width]
+        return (yy - y) ** 2 + (xx - x) ** 2 <= radius ** 2
+
+    def rain(self, y, x, radius, amount=0.4):
+        """Sube la humedad en la zona (tope 1.0) y apaga el fuego que esté ardiendo."""
+        mask = self._disk(y, x, radius)
+        self.terrain.moisture[mask] = np.clip(self.terrain.moisture[mask] + amount, 0.0, 1.0)
+        self.fire.matrix[mask & (self.fire.matrix == BURNING)] = NO_FIRE
+
+    def drought(self, y, x, radius, amount=0.4):
+        """Baja la humedad en la zona (piso 0.0)."""
+        mask = self._disk(y, x, radius)
+        self.terrain.moisture[mask] = np.clip(self.terrain.moisture[mask] - amount, 0.0, 1.0)
+
+    def lightning(self, y, x):
+        """Ignición en una celda. Solo prende si es tierra y no está ya en llamas."""
+        if not (0 <= y < self.height and 0 <= x < self.width):
+            return False
+        if self.terrain.matrix[y, x] != DIRT or self.fire.matrix[y, x] != NO_FIRE:
+            return False
+        self.fire.matrix[y, x] = BURNING
+        return True
 
     def rebuilt_gradient (self):
         """Rehace home_dist, home_field y outbound_field a partir de terrain.matrix actual.
