@@ -1,5 +1,14 @@
 """Global configuration parameters and constants for the simulation."""
 
+# GRUPO 4: Integración 
+COLLISION_MODE = "allies_pass"   # o "block"
+INITIAL_WORKERS = 20
+INITIAL_SOLDIERS = 3
+BIRTH_INTERVAL = 3
+BIRTH_SOLDIER_RATIO = 0.15
+MAX_POPULATION = 100             # ajusta viendo la simulación
+STARVATION_INTERVAL = 10         # ajusta viendo la simulación
+
 # World Settings
 SEED = 1
 WIDTH = 110
