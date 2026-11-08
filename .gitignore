@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Ajustes locales del jugador (los crea el juego)
+settings.json
+settings.tmp

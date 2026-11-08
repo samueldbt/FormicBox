@@ -1,9 +1,8 @@
-from Simulación.simulation import Simulation
-from Interfaz.game import Game
+from app import App
 
 
 def main():
-    Game(Simulation()).run()
+    App().run()
 
 
 if __name__ == "__main__":

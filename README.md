@@ -255,8 +255,17 @@ El jugador interviene el ambiente, no las hormigas:
 
 ## Instalación y uso
 
+**Requisitos:** Python 3, `pygame` y `numpy` (`pip install pygame numpy`).
 
-**Requisitos:** ``
+```bash
+python main.py                                   # título -> menú -> Modo Dios / Ajustes
+python pruebas/headless.py --seed 1 --ticks 2000 # simulación sin pygame, imprime métricas
+python pruebas/headless.py --seed 1 --ticks 2000 --json
+```
+
+**Pantallas** (`Escenas/`, ventana única creada en `app.py`): título, menú (Modo Dios, Testeo, Lucha, Ajustes, Salir), ajustes y game over. Se controlan con teclado: flechas arriba/abajo, Enter para elegir, Esc para volver; en Ajustes, izquierda/derecha cambia los volúmenes. Los ajustes se guardan en `settings.json` (si falta o está dañado se usan valores por defecto). En Modo Dios, **F9** fuerza el game over para probar esa pantalla.
+
+**Métricas headless** (`pruebas/headless.py`): hormigas vivas y bajas por casta, recursos entregados, hormigas que no se movieron en los últimos 50 ticks (`--quieto`) y fracción del tráfico total que concentra el 5 % de celdas caminables más transitadas (`--top`); si el tráfico fuera uniforme rondaría el 5 %, cuanto más alto, más "autopistas".
 
 ## Documentación
 

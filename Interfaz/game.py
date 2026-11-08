@@ -10,10 +10,14 @@ from .debug_tools import DebugTools, TOOLS
 
 
 class Game:
-    def __init__(self, sim):
-        pygame.init()
-        pygame.display.set_caption("FormicBox")
-        self.screen = pygame.display.set_mode((config.SCREEN_W, config.SCREEN_H), pygame.RESIZABLE)
+    def __init__(self, sim, screen=None):
+        """screen=None: crea su propia ventana (uso suelto con run()).
+        Con screen: usa una ventana ya creada (Modo Dios dentro de la pila de escenas)."""
+        if screen is None:
+            pygame.init()
+            pygame.display.set_caption("FormicBox")
+            screen = pygame.display.set_mode((config.SCREEN_W, config.SCREEN_H), pygame.RESIZABLE)
+        self.screen = screen
         self.sim = sim
         self.assets = AssetManager()          # requiere la ventana ya creada (convert_alpha)
         self.view = ViewState()
@@ -29,12 +33,13 @@ class Game:
         self.acc = 0.0
         self.step_request = False
         self.running = True
+        self.running_standalone = True   # False dentro de la pila de escenas: la App hace el flip
         self._layout()
         self.camera.center_on(*sim.nest)
 
     # ------------------------------------------------------------ layout y panel
     def _layout(self):
-        W, H = self.screen.get_size()
+        W, H = self._size = self.screen.get_size()
         self.map_rect = pygame.Rect(0, 0, max(100, W - config.PANEL_W), H)
         self.panel_rect = pygame.Rect(self.map_rect.right, 0, config.PANEL_W, H)
         self.camera.set_view(self.map_rect.w, self.map_rect.h)
@@ -108,22 +113,30 @@ class Game:
     # ------------------------------------------------------------ eventos
     def _events(self):
         for e in pygame.event.get():
-            if e.type == pygame.QUIT:
-                self.running = False
-            elif e.type == pygame.VIDEORESIZE:
-                self.screen = pygame.display.get_surface()
-                self._layout()
-            elif e.type == pygame.KEYDOWN:
-                self._key(e.key)
-            elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
-                if self.map_rect.collidepoint(e.pos):
-                    cell = self.camera.screen_to_cell(e.pos[0] - self.map_rect.x, e.pos[1] - self.map_rect.y)
-                    if cell:
-                        self.tools.apply(*cell)
-                else:
-                    for b in self.buttons:
-                        if b.click(e.pos):
-                            break
+            self.handle_event(e)
+
+    def handle_event(self, e):
+        if e.type == pygame.QUIT:
+            self.running = False
+        elif e.type == pygame.VIDEORESIZE:
+            self.set_screen(pygame.display.get_surface())
+        elif e.type == pygame.KEYDOWN:
+            self._key(e.key)
+        elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
+            if self.map_rect.collidepoint(e.pos):
+                cell = self.camera.screen_to_cell(e.pos[0] - self.map_rect.x, e.pos[1] - self.map_rect.y)
+                if cell:
+                    self.tools.apply(*cell)
+            else:
+                for b in self.buttons:
+                    if b.click(e.pos):
+                        break
+
+    def set_screen(self, screen):
+        """Cambia la superficie de dibujo (redimensionar, pantalla completa) y rehace el panel."""
+        if screen is not self.screen or screen.get_size() != self._size:
+            self.screen = screen
+            self._layout()
 
     def _key(self, k):
         if k == pygame.K_ESCAPE:
@@ -145,29 +158,36 @@ class Game:
 
     # ------------------------------------------------------------ bucle
     def run(self):
+        """Bucle propio (uso suelto, sin escenas)."""
         clock = pygame.time.Clock()
-        T = config.TICK_SECONDS
         while self.running:
             dt = clock.tick(config.FPS) / 1000.0
             self._events()
-            self.camera.update(pygame.key.get_pressed(), dt)
-
-            if not self.paused:
-                self.acc += dt * self.speeds[self.speed_i]
-                n = 0
-                while self.acc >= T and n < config.MAX_STEPS_PER_FRAME:
-                    self.acc -= T
-                    self.sim.step()
-                    n += 1
-                if self.acc >= T:          # el PC no da abasto: se descarta el atraso
-                    self.acc = 0.0
-            elif self.step_request:
-                self.sim.step()
-                self.acc = T * 0.999       # en pausa se ve el estado final del tick
-            self.step_request = False
-
-            self._draw(min(1.0, self.acc / T))
+            self.update(dt)
+            self.draw()
         pygame.quit()
+
+    def update(self, dt):
+        T = config.TICK_SECONDS
+        self.camera.update(pygame.key.get_pressed(), dt)
+        if not self.paused:
+            self.acc += dt * self.speeds[self.speed_i]
+            n = 0
+            while self.acc >= T and n < config.MAX_STEPS_PER_FRAME:
+                self.acc -= T
+                self.sim.step()
+                n += 1
+            if self.acc >= T:          # el PC no da abasto: se descarta el atraso
+                self.acc = 0.0
+        elif self.step_request:
+            self.sim.step()
+            self.acc = T * 0.999       # en pausa se ve el estado final del tick
+        self.step_request = False
+
+    def draw(self, surface=None):
+        if surface is not None:
+            self.set_screen(surface)
+        self._draw(min(1.0, self.acc / config.TICK_SECONDS))
 
     # ------------------------------------------------------------ dibujo
     def _draw(self, s):
@@ -177,7 +197,8 @@ class Game:
         self.map_renderer.draw(view, self.camera, s)
         self.entities.draw(view, self.camera, self.sim, s)
         self._draw_panel()
-        pygame.display.flip()
+        if self.running_standalone:
+            pygame.display.flip()
 
     def _text(self, lines, x, y, color=(220, 220, 220)):
         for line in lines:
@@ -209,4 +230,4 @@ class Game:
         if self.map_rect.collidepoint(mx, my):
             cell = self.camera.screen_to_cell(mx - self.map_rect.x, my - self.map_rect.y)
             if cell:
-                self._text(self.tools.inspect_lines(*cell), x, y + 8, (170, 255, 170))
+                self._text(self.tools.inspect_lines(*cell), x, y + 8, (170, 255, 170))
