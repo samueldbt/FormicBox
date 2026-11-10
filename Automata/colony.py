@@ -33,8 +33,8 @@ class Colony:
             self.update_fungus_state()
 
     def update_fungus_state(self):
-        """ESTRESADO si la reserva de bocadillo supera U_AZUCAR; si no, NORMAL."""
-        if self.delivered[BOCADILLO] > config.U_AZUCAR:
+        """ESTRESADO si la reserva de bocadillo supera T_SUGAR; si no, NORMAL."""
+        if self.delivered[BOCADILLO] > config.T_SUGAR:
             self.estado_hongo = FungusState.ESTRESADO
         else:
             self.estado_hongo = FungusState.NORMAL
