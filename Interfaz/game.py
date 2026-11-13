@@ -200,7 +200,7 @@ class Game:
             f"En cola de salida: {st['queued']}",
             f"Salida: {'esperando a la exploradora' if self.sim.waiting_scout else 'libre'}",
             f"Pasto {st['grass']}  Mango {st['mango']}  Bocad. {st['bocadillos']}",
-            f"Reserva P/M/B: {st['stock'][0]}/{st['stock'][1]}/{st['stock'][2]}  Crias {st['brood']}",
+            f"Bolsa {st['units']:.0f} u (P/M/B {st['stock'][0]}/{st['stock'][1]}/{st['stock'][2]})  Crias {st['brood']}",
             f"Hongo: {'ESTRESADO' if st['stressed'] else 'normal'} {'| HAMBRE' if st['starving'] else ''}",
             f"Fuego {st['burning']}  Ceniza {st['ash']}",
             f"Viento ({config.WIND_X:.1f}, {config.WIND_Y:.1f})",

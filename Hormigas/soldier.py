@@ -1,5 +1,4 @@
 import math
-import random
 import config
 
 from .ant import Ant
@@ -10,8 +9,6 @@ from .marabunta import damage
 STATE_PATROL = "PATROL"
 STATE_ATTACK = "ATTACK"
 
-# Parámetros. Pasarlos a config
-PATROL_RADIUS = 12
 ATTACK_ENTER_ALARM = 0.5
 ATTACK_EXIT_ALARM = 0.1
 ALARM_TRAIL_K = 2.0
@@ -19,8 +16,6 @@ DEPOSIT_AMOUNT_ALARM = 40.0
 WEIGHT_ALARM_ATTRACT = 8.0
 WEIGHT_PATROL_HOME = 3.0
 WEIGHT_INERTIA = 1.5
-SOLDIER_HEALTH = 10.0
-SOLDIER_BITE = 2.0
 WEIGHT_ENEMY = 8.0
 
 
@@ -29,8 +24,8 @@ class Soldier(Ant):
 
     def __init__(self, y, x, nest_pos, agents=None):
         super().__init__(y, x, nest_pos, agents)
-        self.health = SOLDIER_HEALTH
-        self.enemy = None                 # marabunta más cercana a la vista (radio VISION_RADIUS)
+        self.health = config.SOLDIER_HEALTH
+        self.enemy = None
         self.state = STATE_PATROL
         self.carried_resource = NONE
 
@@ -52,7 +47,7 @@ class Soldier(Ant):
             self._attack()
 
     def _evaluate_state(self, automaton, p):
-        """Prioridad: huir del fuego > comer en el nido > atacar > energía baja > patrullar."""
+        """Prioridad: huir del fuego > comer en el nido > atacar > energía justa para volver > patrullar."""
         if p.fire_dist is not None and p.fire_dist <= config.FIRE_ALERT_RADIUS:
             self.state = config.STATE_FLEE
             return
@@ -60,7 +55,7 @@ class Soldier(Ant):
             self.state = STATE_PATROL
 
         if p.at_nest:
-            self.refuel_at_nest(automaton, config.REFUEL_BELOW)
+            self.refuel_at_nest(automaton)
             if self.state == config.STATE_FEED:
                 self.state = STATE_PATROL
 
@@ -76,11 +71,10 @@ class Soldier(Ant):
         has_food = automaton.colony.has_food()
         if self.state == config.STATE_FEED and not has_food:
             self.state = STATE_PATROL
-        if self.state == STATE_PATROL and self.energy < config.LOW_ENERGY_THRESHOLD and has_food:
+        if self.state == STATE_PATROL and has_food and self.low_energy(automaton):
             self.state = config.STATE_FEED
 
     def _move(self, automaton, occupied_mask):
-        # Ya pegada (ortogonalmente) a una marabunta: se queda peleando
         if self.state == STATE_ATTACK and self.enemy is not None and self.manhattan(self.enemy) <= 1:
             return
 
@@ -90,12 +84,13 @@ class Soldier(Ant):
         neighbors = self.allowed_neighbors(all_neighbors)
 
         home_angle = self.get_home_angle()
+        d_cur = self.dist_home(automaton, self.y, self.x)
         heading = (self.y - self.last_y, self.x - self.last_x)
         d_nest = max(abs(self.y - self.nest_y), abs(self.x - self.nest_x))
 
-        moves, weights = [], []
+        moves, scores = [], []
         for ny, nx, dy, dx in neighbors:
-            home_alignment = math.cos(home_angle - math.atan2(dy, dx))
+            align = self.home_align(automaton, ny, nx, dy, dx, d_cur, home_angle)
             inertia = self._inertia(dy, dx, heading)
             alarm = automaton.pheromones["alarma"].matrix[ny, nx]
 
@@ -109,16 +104,16 @@ class Soldier(Ant):
                 heat = self.fire_heat(automaton, ny, nx)
                 score = config.WEIGHT_FLEE * (1.0 - heat) + 0.5 * inertia
             elif self.state == config.STATE_FEED:
-                score = config.WEIGHT_HOME * home_alignment
-            else:  # PATROL
-                over = max(0.0, d_nest / PATROL_RADIUS - 1.0)
-                score = WEIGHT_PATROL_HOME * over * home_alignment + inertia
+                score = config.WEIGHT_HOME * (align + 1.0) / 2.0
+            else:  # PATROL: paseo con inercia que no se aleja más de SOLDIER_PATROL_RADIUS
+                over = max(0.0, d_nest / config.SOLDIER_PATROL_RADIUS - 1.0)
+                score = WEIGHT_PATROL_HOME * over * align + inertia
 
-            score += config.WEIGHT_RANDOM * random.random()
+            score += self.noise()
             moves.append((ny, nx))
-            weights.append(max(0.001, score) ** 3)
+            scores.append(score)
 
-        self.commit_move(*random.choices(moves, weights=weights, k=1)[0])
+        self.commit_move(*self.pick_move(moves, scores))
 
     @staticmethod
     def _inertia(dy, dx, heading):
@@ -133,6 +128,6 @@ class Soldier(Ant):
         if e is not None and self.manhattan(e) <= 1:
             self.face_towards(e)
             self.attacking = True
-            damage(e, SOLDIER_BITE)
+            damage(e, config.SOLDIER_BITE)
             if not e.alive:
                 self.enemy = None

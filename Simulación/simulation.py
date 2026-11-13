@@ -29,10 +29,10 @@ class Simulation:
         if seed is not None:
             self.seed = seed
         if self.scenario is not None:
-            self.seed = get_scenario(self.scenario).seed      # los escenarios fijan su semilla
-        random.seed(self.seed)                                # los agentes usan el módulo random
+            self.seed = get_scenario(self.scenario).seed
+        random.seed(self.seed)
         self.automaton = CellularAutomaton(config.WIDTH, config.HEIGHT, self.seed, scenario=self.scenario)
-        self.agents = []                                      # lista COMPARTIDA: solo se muta en sitio
+        self.agents = []                          # lista COMPARTIDA: solo se muta en sitio
         self.tick = 0
         self.version = 0
         self.terrain_version = 0
@@ -40,15 +40,19 @@ class Simulation:
         self.game_over = False
         self.events = []
         self.deaths = {"WORKER": 0, "SOLDIER": 0, "MARABUNTA": 0}
+        self.death_causes = {}                    # causa -> cantidad (obreras y soldadas)
+        self.lost_with_food = 0                   # murieron sin energía habiendo comida en el nido
+        self.births = 0
         self._starve_timer = 0
         self.traffic = np.zeros((self.automaton.height, self.automaton.width), dtype=np.float32)
         castes = ["WORKER"] * config.INITIAL_WORKERS + ["SOLDIER"] * config.INITIAL_SOLDIERS
         random.shuffle(castes)
         self.queue = deque(castes)
-        self.scout = None                 # la primera hormiga en salir
+        # Salida escalonada: la primera sale sola y las demás esperan a que entregue comida
+        self.scout = None
         self.scout_tick = 0
         self.last_exit = -10 ** 9
-        self.gate_open = False            # se abre cuando la exploradora entrega comida
+        self.gate_open = False
         self.waiting_scout = False
 
     @property
@@ -65,7 +69,7 @@ class Simulation:
         a = self.automaton
         nest = self.nest
 
-        # 0. Guardar posición previa (para interpolar) y retirar cadáveres vencidos
+        # 0. Posición previa (para interpolar) y retirada de cadáveres vencidos
         for ag in self.agents:
             ag.prev_y, ag.prev_x = ag.y, ag.x
             if not ag.alive:
@@ -81,10 +85,8 @@ class Simulation:
             if ag.alive and fire[ag.y, ag.x] > 0:
                 ag.die("FIRE")
 
-        # 3. Salida escalonada del nido (población inicial)
+        # 3. Salida del nido, crías que maduran, nuevas crías y hambre del hongo
         self._release_queue(nest)
-
-        # 3b. Crías que maduran, nuevas crías y hambre del hongo
         self._mature_brood()
         self._births()
         self._hunger()
@@ -98,7 +100,7 @@ class Simulation:
         order = [ag for ag in self.agents if ag.alive]
         random.shuffle(order)
         for ag in order:
-            if not ag.alive:                      # la mató otra hormiga durante este tick
+            if not ag.alive:
                 continue
             old = (ag.y, ag.x)
             group = "MARA" if ag.CASTE == "MARABUNTA" else "ALLY"
@@ -116,16 +118,21 @@ class Simulation:
                 else:
                     occupied[old] = False
                     occupied[new] = new != nest
-                if not ag.attacking:              # si muerde, conserva la orientación hacia la presa
+                if not ag.attacking:
                     ag.facing = (new[0] - old[0], new[1] - old[1])
 
-        # 5. Las que murieron: se cuentan y, si fue en combate o fuego, dejan alarma (una vez)
+        # 5. Bajas: se cuentan por causa; en combate o fuego dejan alarma (una vez)
         for ag in self.agents:
             if not ag.alive and not ag.death_handled:
                 ag.death_handled = True
                 self.deaths[ag.CASTE] += 1
-                if ag.CASTE != "MARABUNTA" and ag.death_cause in ("FIGHT", "FIRE"):
-                    a.deposit_pheromone("alarma", ag.y, ag.x, config.DEPOSIT_AMOUNT_DEATH_ALARM)
+                cause = ag.death_cause or "?"
+                if ag.CASTE != "MARABUNTA":
+                    self.death_causes[cause] = self.death_causes.get(cause, 0) + 1
+                    if cause == "STARVE" and a.colony.has_food():
+                        self.lost_with_food += 1
+                    if cause in ("FIGHT", "FIRE"):
+                        a.deposit_pheromone("alarma", ag.y, ag.x, config.DEPOSIT_AMOUNT_DEATH_ALARM)
 
         # 6. Mapa de tráfico
         self.traffic *= config.TRAFFIC_DECAY
@@ -133,25 +140,17 @@ class Simulation:
             if ag.alive and ag.CASTE == "WORKER" and (ag.y, ag.x) != nest:
                 self.traffic[ag.y, ag.x] += 1.0
 
-        # 7. Game over: ninguna obrera viva, en cola ni en desarrollo, y sin reservas para una nueva
+        # 7. Game over: ninguna obrera viva, en cola ni en desarrollo, y sin bolsa para una nueva
         c = a.colony
         workers_alive = any(ag.alive and ag.CASTE == "WORKER" for ag in self.agents)
         if (not workers_alive and "WORKER" not in self.queue
                 and c.brood_count("WORKER") == 0 and not c.can_afford("WORKER")):
             self.game_over = True
 
-    # ------------------------------------------------------------ crías y hambre
-    def _population(self):
-        n = sum(1 for ag in self.agents if ag.alive and ag.CASTE != "MARABUNTA")
-        return n + len(self.queue) + self.automaton.colony.brood_count()
-
-    def _mature_brood(self):
-        for caste in self.automaton.colony.tick_brood():
-            self.agents.append(self._make(caste, *self.nest))
-
+    # ------------------------------------------------------------ salida, crías y hambre
     def _release_queue(self, nest):
-        """Sale 1 hormiga cada SPAWN_INTERVAL ticks. La primera (una obrera) sale sola;
-        las demás esperan a que entregue comida al nido (o a que pase SCOUT_TIMEOUT)."""
+        """Sale 1 hormiga cada SPAWN_INTERVAL ticks. La primera (una obrera) sale sola; las demás
+        esperan a que entregue comida al nido (o a que pasen SCOUT_TIMEOUT ticks)."""
         self.waiting_scout = False
         if not self.queue:
             return
@@ -170,23 +169,41 @@ class Simulation:
         ag = self._make(caste, *nest)
         self.agents.append(ag)
         self.last_exit = self.tick
-        if not self.gate_open:               # la que sale ahora es la exploradora (o su reemplazo si murió)
+        if not self.gate_open:
             self.scout, self.scout_tick = ag, self.tick
 
+    def _pop_counts(self):
+        """(obreras, soldadas) contando vivas, en cola de salida y en desarrollo."""
+        w = sum(1 for ag in self.agents if ag.alive and ag.CASTE == "WORKER")
+        s = sum(1 for ag in self.agents if ag.alive and ag.CASTE == "SOLDIER")
+        w += sum(1 for c in self.queue if c == "WORKER") + self.automaton.colony.brood_count("WORKER")
+        s += sum(1 for c in self.queue if c == "SOLDIER") + self.automaton.colony.brood_count("SOLDIER")
+        return w, s
+
+    def _population(self):
+        w, s = self._pop_counts()
+        return w + s
+
+    def _mature_brood(self):
+        for caste in self.automaton.colony.tick_brood():
+            self.agents.append(self._make(caste, *self.nest))
+            self.births += 1
+
     def _births(self):
-        """El excedente (sobre la reserva de 3 ciclos del hongo) se convierte en crías en desarrollo."""
+        """El excedente (sobre 3 ciclos de alimento para toda la población y el hongo) se vuelve crías."""
         colony = self.automaton.colony
         if self.queue or self.tick % config.BIRTH_INTERVAL != 0 or colony.starving:
             return
-        if self._population() >= config.MAX_POPULATION:
+        pop = self._pop_counts()
+        if sum(pop) >= config.MAX_POPULATION:
             return
         caste = "SOLDIER" if random.random() < config.BIRTH_SOLDIER_RATIO else "WORKER"
-        if caste == "SOLDIER" and not colony.can_afford("SOLDIER", keep_reserve=True):
+        if caste == "SOLDIER" and not colony.can_afford("SOLDIER", True, pop):
             caste = "WORKER"
-        colony.start_brood(caste, keep_reserve=True)
+        colony.start_brood(caste, pop)
 
     def _hunger(self):
-        """Si el hongo no tiene qué comer, una hormiga muere cada STARVATION_INTERVAL ticks."""
+        """Con la bolsa vacía, una hormiga muere (HUNGER) cada STARVATION_INTERVAL ticks."""
         if self.automaton.colony.upkeep():
             self._starve_timer = 0
             return
@@ -195,11 +212,10 @@ class Simulation:
             self._starve_timer = 0
             victims = [ag for ag in self.agents if ag.alive and ag.CASTE != "MARABUNTA"]
             if victims:
-                random.choice(victims).die("STARVE")
+                random.choice(victims).die("HUNGER")
 
     # ------------------------------------------------------------ máscaras de ocupación
     def _occupied_mask(self):
-        """Modo 'block': celdas ocupadas (vivas y cadáveres). El nido está exento."""
         m = np.zeros((self.automaton.height, self.automaton.width), dtype=bool)
         for ag in self.agents:
             m[ag.y, ag.x] = True
@@ -207,7 +223,6 @@ class Simulation:
         return m
 
     def _group_masks(self):
-        """Modo 'allies_pass': ALLY ve marabuntas y cadáveres; MARA ve obreras/soldadas y cadáveres."""
         shape = (self.automaton.height, self.automaton.width)
         cnt = {"ALLY": np.zeros(shape, dtype=np.int16), "MARA": np.zeros(shape, dtype=np.int16)}
         for ag in self.agents:
@@ -252,17 +267,19 @@ class Simulation:
         return True
 
     def spawn_swarm(self, n):
-        """n marabuntas entrando por el borde más lejano al nido (gratis)."""
+        """n marabuntas en el borde más cercano al nido, a SWARM_MIN_DIST o más de camino (gratis)."""
         occ = self._occupied_mask()
+        cells = Marabunta.spawn_cells(self.automaton, n)
+        random.shuffle(cells)
         made = 0
-        for _ in range(n):
-            for _try in range(30):
-                y, x = Marabunta.spawn_position(self.automaton)
-                if not occ[y, x]:
-                    self.agents.append(self._make("MARABUNTA", y, x))
-                    occ[y, x] = True
-                    made += 1
-                    break
+        for y, x in cells:
+            if made >= n:
+                break
+            if occ[y, x]:
+                continue
+            self.agents.append(self._make("MARABUNTA", y, x))
+            occ[y, x] = True
+            made += 1
         self.version += 1
         return made
 
@@ -302,8 +319,7 @@ class Simulation:
 
     # ------------------------------------------------------------ piedra y agua
     def place_terrain(self, kind, y, x):
-        """kind = ROCK, WATER o DIRT. No sobre el nido ni sobre una hormiga.
-        Delega en CellularAutomaton.place_terrain (conectividad, humedad y campos del nido)."""
+        """kind = ROCK, WATER o DIRT. No sobre el nido ni sobre una hormiga."""
         a = self.automaton
         if kind not in (DIRT, ROCK, WATER):
             return False
@@ -314,7 +330,6 @@ class Simulation:
             return False
         if not a.place_terrain(y, x, kind):
             return False
-        # Quien quedó sobre roca/agua (zona sellada) muere
         for ag in self.agents:
             if ag.alive and a.terrain.matrix[ag.y, ag.x] not in (DIRT, NEST):
                 ag.die("FIGHT")
@@ -327,13 +342,13 @@ class Simulation:
 
     # ------------------------------------------------------------ game over y estadísticas
     def summary(self):
-        spt = config.TICK_SECONDS
         d = self.automaton.colony.delivered
         return {
             "ticks": self.tick,
-            "seconds": self.tick * spt,
+            "seconds": self.tick * config.TICK_SECONDS,
             "delivered": {"grass": d[GRASS], "mango": d[MANGO], "bocadillo": d[BOCADILLO]},
             "deaths": dict(self.deaths),
+            "death_causes": dict(self.death_causes),
         }
 
     def stats(self):
@@ -352,7 +367,9 @@ class Simulation:
             "bocadillos": len(a.objects.bocadillo_bites),
             "delivered": (d[GRASS], d[MANGO], d[BOCADILLO]),
             "stock": (s[GRASS], s[MANGO], s[BOCADILLO]),
+            "units": a.colony.food_units(),
             "brood": a.colony.brood_count(),
+            "births": self.births,
             "starving": a.colony.starving,
             "stressed": a.colony.is_stressed(),
             "burning": int((a.fire.matrix == BURNING).sum()),

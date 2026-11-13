@@ -40,20 +40,22 @@ def perceive(ant, automaton, ignore=()):
     p.alarm_here = float(ph["alarma"].matrix[ant.y, ant.x])
     p.trail_here = float(ph["vegetal"].matrix[ant.y, ant.x] + ph["azucar"].matrix[ant.y, ant.x])
 
-    # Recursos visibles: el de mayor valor/(1+distancia), así un mango algo lejos le gana a un pasto pegado
+    # Recursos visibles (sin contar la celda propia): el de mayor valor/(1+distancia)
     best, best_score = None, -1.0
     ys, xs = np.nonzero(objs[y0:y1, x0:x1])
     for j, i in zip(ys.tolist(), xs.tolist()):
         y, x = y0 + j, x0 + i
+        d = abs(y - ant.y) + abs(x - ant.x)
+        if d == 0:
+            continue
         kind = int(objs[y, x])
         if kind in ignore or fire[y, x] != 0:
             continue
-        d = abs(y - ant.y) + abs(x - ant.x)
-        score = config.RESOURCE_VALUE.get(kind, 1.0) / (1.0 + d)
+        score = config.food_value(kind) / (1.0 + d)
         if score > best_score:
             best, best_score = (y, x, kind, d), score
     p.resource = best
-    
+
     # Fuego visible
     fy, fx = np.nonzero(fire[y0:y1, x0:x1] > 0)
     if len(fy):

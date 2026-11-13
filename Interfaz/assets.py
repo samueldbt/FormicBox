@@ -99,11 +99,13 @@ class AssetManager:
             self.block_big[kind] = pygame.transform.scale(img, (2 * T, 2 * T)) if img else None
 
     def block_surface(self, kind, left, total):
-        """Imagen 2x2 del objeto según las mordidas que le quedan (con caché)."""
-        key = (kind, left, total)
+        """Imagen 2x2 según las mordidas restantes, cuantizada a 12 niveles (con caché)."""
+        steps = 12
+        q = max(1, min(steps, -(-left * steps // max(1, total))))     # techo de left*steps/total
+        key = (kind, q)
         s = self._block_cache.get(key)
         if s is None:
-            s = self._block_cache[key] = self._make_block(kind, left, total)
+            s = self._block_cache[key] = self._make_block(kind, q, steps)
         return s
 
     def _make_block(self, kind, left, total):

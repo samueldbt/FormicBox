@@ -1,8 +1,10 @@
+import math
 import config
 from enum import Enum
 from .objects import GRASS, MANGO, BOCADILLO
 
 KINDS = {"GRASS": GRASS, "MANGO": MANGO, "BOCADILLO": BOCADILLO}
+NAMES = {v: k for k, v in KINDS.items()}
 
 
 class FungusState(Enum):
@@ -11,55 +13,93 @@ class FungusState(Enum):
 
 
 class Colony:
-    """Reservas del nido, jardín fúngico, crías en desarrollo y hambre.
+    """Bolsa de alimento del nido, jardín fúngico, crías en desarrollo y hambre.
 
-    Uso desde fuera:
-      colony.is_stressed()          -> True / False
-      colony.has_food() / eat()     -> comida para las hormigas (devuelve energía ganada)
-      colony.can_afford(c) / pay(c) -> costo de una casta ("WORKER" / "SOLDIER")
-      colony.start_brood(c)         -> paga y deja la cría en desarrollo
-      colony.tick_brood()           -> avanza el desarrollo; devuelve las castas que maduraron
-      colony.upkeep()               -> el hongo come; False si el nido está en hambruna
+    La bolsa se mide en UNIDADES: 1 bocadillo = 2 mango = 3 pasto (config.FOOD_VALUE).
+    Crías, hongo y comida de las hormigas se pagan en unidades, no en cantidades exactas de cada recurso.
+
+      colony.food_units() / has_food()   -> alimento total
+      colony.feed(need)                  -> una hormiga come; devuelve la energía ganada
+      colony.can_afford(c, keep_reserve, pop) / pay(...) / start_brood(c, pop)
+      colony.tick_brood()                -> castas que maduraron
+      colony.upkeep()                    -> el hongo come; False si la bolsa está vacía
+      colony.is_stressed()               -> True si hay demasiado bocadillo en reserva
     """
 
     def __init__(self):
-        self.delivered = {GRASS: 0, MANGO: 0, BOCADILLO: 0}     # acumulado histórico
-        self.stock = {k: int(config.START_STOCK[n]) for n, k in KINDS.items()}   # reserva actual
-        self.brood = []                                          # [{"caste", "ticks_left"}]
+        self.delivered = {GRASS: 0, MANGO: 0, BOCADILLO: 0}                       # acumulado histórico (items)
+        self.stock = {k: int(config.START_STOCK.get(n, 0)) for n, k in KINDS.items()}   # reserva actual (items)
+        self.credit = 0.0         # "cambio": sobrante cuando un pago se pasa de la cuenta
+        self.brood = []           # [{"caste", "ticks_left"}]
         self.starving = False
         self._tick = 0
         self.estado_hongo = FungusState.NORMAL
         self.update_fungus_state()
+        self.update_starving()
 
-    # ------------------------------------------------------------ reservas
+    # ------------------------------------------------------------ bolsa
+    @staticmethod
+    def value(kind):
+        return config.FOOD_VALUE[NAMES[int(kind)]]
+
+    def food_units(self):
+        return sum(q * self.value(k) for k, q in self.stock.items()) + self.credit
+
+    def has_food(self):
+        return self.food_units() >= 0.2
+
     def deliver(self, kind, quantity=1):
         kind = int(kind)
         if kind in self.stock:
             self.stock[kind] += quantity
             self.delivered[kind] += quantity
             self.update_fungus_state()
+            self.update_starving()
+
+    def delivered_units(self):
+        return sum(q * self.value(k) for k, q in self.delivered.items())
 
     def consume(self, kind, quantity=1):
-        """Resta de la reserva (nunca baja de 0)."""
         kind = int(kind)
         if kind in self.stock:
             self.stock[kind] = max(0, self.stock[kind] - quantity)
             self.update_fungus_state()
 
-    def vegetal(self):
-        return self.stock[GRASS] + self.stock[MANGO]
+    def _take_units(self, units, order):
+        """Saca `units` unidades de la bolsa en el orden dado. Devuelve lo que NO pudo pagar."""
+        left = float(units)
+        if self.credit > 0:
+            use = min(self.credit, left)
+            self.credit -= use
+            left -= use
+        for name in order:
+            if left <= 1e-9:
+                break
+            k, v = KINDS[name], config.FOOD_VALUE[name]
+            if self.stock[k] <= 0 or v <= 0:
+                continue
+            n = min(self.stock[k], math.ceil(left / v - 1e-9))
+            self.stock[k] -= n
+            left -= n * v
+        if left < -1e-9:
+            self.credit += -left       # se pasó de la cuenta: guarda el cambio
+            left = 0.0
+        self.update_fungus_state()
+        return max(0.0, left)
 
-    def has_food(self):
-        return any(q > 0 for q in self.stock.values())
-
-    def eat(self):
-        """Una hormiga come una unidad de la reserva. Devuelve la energía ganada (0 si no hay)."""
+    def feed(self, need):
+        """Una hormiga come para recuperar hasta `need` de energía. Devuelve la energía ganada.
+        No gasta un item entero si solo necesita menos de la mitad de lo que da."""
+        gained = 0.0
         for name in config.EAT_ORDER:
             k = KINDS[name]
-            if self.stock[k] > 0:
-                self.consume(k)
-                return float(config.ENERGY_PER_FOOD[name])
-        return 0.0
+            e_item = config.ENERGY_PER_UNIT * config.FOOD_VALUE[name]
+            while self.stock[k] > 0 and need - gained >= 0.5 * e_item:
+                self.stock[k] -= 1
+                gained += e_item
+        self.update_fungus_state()
+        self.update_starving()
+        return gained
 
     # ------------------------------------------------------------ hongo
     def update_fungus_state(self):
@@ -72,54 +112,57 @@ class Colony:
     def is_stressed(self):
         return self.estado_hongo == FungusState.ESTRESADO
 
+    def update_starving(self):
+        self.starving = self.food_units() < config.FUNGUS_COST
+
     def upkeep(self):
-        """El hongo come cada FUNGUS_INTERVAL ticks. Devuelve False mientras no haya con qué alimentarlo."""
+        """El hongo come FUNGUS_COST unidades cada FUNGUS_EVERY ticks. False mientras la bolsa esté vacía."""
         self._tick += 1
-        if self._tick % config.FUNGUS_INTERVAL == 0:
-            need = config.FUNGUS_COST
-            have = self.vegetal()
-            take = min(need, have)
-            for k in (GRASS, MANGO):
-                q = min(take, self.stock[k])
-                self.consume(k, q)
-                take -= q
-            self.starving = have < need
+        if self._tick % config.FUNGUS_EVERY == 0:
+            self._take_units(config.FUNGUS_COST, config.PAY_ORDER)
+        self.update_starving()
         return not self.starving
 
     # ------------------------------------------------------------ crías
-    def _cost(self, caste):
-        return {KINDS[n]: q for n, q in config.CASTE_COST[caste].items()}
+    @staticmethod
+    def demand_cycle(workers, soldiers):
+        d = config.DEMAND_CYCLE
+        return workers * d["WORKER"] + soldiers * d["SOLDIER"]
 
-    def reserve_needed(self):
-        """Pasto/mango que debe quedar para mantener el hongo RESERVE_CYCLES ciclos más."""
-        return config.FUNGUS_COST * config.RESERVE_CYCLES
+    def reserve_needed(self, workers, soldiers):
+        """Unidades que deben quedar para alimentar a esa población (y al hongo) RESERVE_CYCLES ciclos."""
+        fungus = config.FUNGUS_COST * config.CYCLE_TICKS / config.FUNGUS_EVERY
+        return config.RESERVE_CYCLES * (self.demand_cycle(workers, soldiers) + fungus)
 
-    def can_afford(self, caste, keep_reserve=False):
-        cost = self._cost(caste)
-        if any(self.stock[k] < q for k, q in cost.items()):
+    def can_afford(self, caste, keep_reserve=False, pop=(0, 0)):
+        """pop = (obreras, soldadas) contando vivas, en cola y en desarrollo."""
+        cost = config.CASTE_COST[caste]
+        units = self.food_units()
+        if units < cost:
             return False
         if keep_reserve:
-            left = self.vegetal() - sum(q for k, q in cost.items() if k in (GRASS, MANGO))
-            if left < self.reserve_needed():
+            w, s = pop
+            w += caste == "WORKER"
+            s += caste == "SOLDIER"
+            if units - cost < self.reserve_needed(w, s):
                 return False
         return True
 
-    def pay(self, caste, keep_reserve=False):
-        if not self.can_afford(caste, keep_reserve):
+    def pay(self, caste, keep_reserve=False, pop=(0, 0)):
+        if not self.can_afford(caste, keep_reserve, pop):
             return False
-        for k, q in self._cost(caste).items():
-            self.consume(k, q)
+        self._take_units(config.CASTE_COST[caste], config.PAY_ORDER)
+        self.update_starving()
         return True
 
-    def start_brood(self, caste, keep_reserve=True):
-        """Paga y deja la cría en desarrollo (el excedente sobre la reserva de 3 ciclos)."""
-        if not self.pay(caste, keep_reserve):
+    def start_brood(self, caste, pop=(0, 0)):
+        """Paga y deja la cría en desarrollo, solo con el excedente sobre la reserva de 3 ciclos."""
+        if not self.pay(caste, True, pop):
             return False
         self.brood.append({"caste": caste, "ticks_left": int(config.DEV_TICKS[caste])})
         return True
 
     def tick_brood(self):
-        """Avanza un tick el desarrollo. Devuelve la lista de castas que maduraron."""
         matured, rest = [], []
         for b in self.brood:
             b["ticks_left"] -= 1

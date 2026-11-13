@@ -36,11 +36,13 @@ class CellularAutomaton:
         self.recompute_fields()
 
         self.objects = EnvironmentObjects(width, height, seed)
+        self.objects.set_zone(self.home_dist)
         if self.scenario is None:
             self.objects.spawn_resources(self.terrain.matrix)
         else:
             self.objects.matrix = o.astype(self.objects.matrix.dtype)
             self.objects.level[self.objects.matrix == GRASS] = 2
+            self.objects.bites[self.objects.matrix == GRASS] = config.GRASS_BITES
             for kind, y, x in blocks:
                 self.objects._put_block(kind, y, x)        # mango/bocadillo 2x2 completos
             self.objects.grass_max = config.GRASS_MAX or int((self.objects.matrix == GRASS).sum())
@@ -92,6 +94,8 @@ class CellularAutomaton:
         self.outbound_field = np.where(
             np.isfinite(self.home_dist), 1.0 - self.home_field, 0.0
         ).astype(np.float32)
+        if hasattr(self, "objects"):
+            self.objects.set_zone(self.home_dist)
 
     rebuilt_gradient = recompute_fields   # nombre antiguo, por compatibilidad
 
@@ -168,7 +172,7 @@ class CellularAutomaton:
             layer.matrix *= is_dirt
 
         # 2. Propagación del fuego (la ceniza expira dentro de FireLayer)
-        self.fire.update_fire(self.terrain.matrix, self.objects.matrix)
+        self.fire.update_fire(self.terrain.matrix, self.objects.matrix, self.terrain.moisture)
 
         # 3. El fuego (y la ceniza) destruyen los objetos de su celda
         self.objects.clear_mask(self.fire.matrix != NO_FIRE)

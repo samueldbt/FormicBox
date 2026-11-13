@@ -28,11 +28,14 @@ def _quad_mean(arr):
 
 class EnvironmentObjects(Grid):
     def __init__(self, width, height, seed=None):
-        """matrix guarda el tipo; level el estado (pasto 1 ralo / 2 tupido); el resto es de los objetos 2x2."""
+        """matrix guarda el tipo; level el estado del pasto (1 ralo / 2 tupido); bites las mordidas del pasto;
+        el resto es de los objetos 2x2."""
         super().__init__(width, height, seed)
         shape = (height, width)
         self.matrix = np.full(shape, NONE, dtype=np.uint8)
         self.level = np.zeros(shape, dtype=np.uint8)
+        self.bites = np.zeros(shape, dtype=np.uint16)    # mordidas restantes del pasto (por celda)
+        self.zone = None                                 # celdas donde pueden nacer recursos (None = todas)
 
         # Objetos 2x2 (mango y bocadillo)
         self.object_piece = np.zeros(shape, dtype=np.uint8)
@@ -59,14 +62,26 @@ class EnvironmentObjects(Grid):
             return sum(1 for k in self.object_kind.values() if k == kind)
         return int((self.matrix == kind).sum())
 
+    # ------------------------------------------------------------ zona de recursos
+    def set_zone(self, home_dist):
+        """Celdas donde nacen recursos: a RESOURCE_MIN_DIST o más del nido (por camino)."""
+        zone = np.isfinite(home_dist) & (home_dist >= config.RESOURCE_MIN_DIST)
+        if getattr(config, "RESOURCE_MAX_DIST", None):
+            zone &= home_dist <= config.RESOURCE_MAX_DIST
+        self.zone = zone if zone.any() else None
+
+    def _zone_mask(self):
+        return self.zone if self.zone is not None else np.ones((self.height, self.width), dtype=bool)
+
     # ------------------------------------------------------------ generación
     def spawn_resources(self, terrain_matrix):
-        """Generates initial grass and mango (2x2 blocks) safely on valid DIRT cells."""
-        valid_dirt = (terrain_matrix == DIRT)
+        """Genera pasto y mango (bloques 2x2) en tierra válida, lejos del nido."""
+        valid_dirt = (terrain_matrix == DIRT) & self._zone_mask()
 
         grass_spots = self.generate_spots(config.GRASS_DENSITY) > 0.5
         self.matrix[valid_dirt & grass_spots] = GRASS
         self.level[self.matrix == GRASS] = 2
+        self.bites[self.matrix == GRASS] = config.GRASS_BITES
 
         self._spawn_mangos(valid_dirt)   # el mango pisa al pasto
 
@@ -94,12 +109,19 @@ class EnvironmentObjects(Grid):
     # ------------------------------------------------------------ consumo
     def consume(self, y, x):
         """Lo único que las hormigas llaman al tomar o comer algo. Devuelve el tipo consumido.
-        Pasto: 2 -> 1 -> vacío. Mango y bocadillo: una mordida por llamada; al llegar a 0 se borran las 4 celdas."""
+        Pasto: GRASS_BITES mordidas (tupido hasta la mitad, luego ralo, luego vacío).
+        Mango y bocadillo: una mordida por llamada; al llegar a 0 se borran las 4 celdas."""
         kind = int(self.matrix[y, x])
         if kind == NONE:
             return NONE
-        if kind == GRASS and self.level[y, x] > 1:
-            self.level[y, x] -= 1
+        if kind == GRASS:
+            left = int(self.bites[y, x]) - 1
+            if left <= 0:
+                self._wipe((slice(y, y + 1), slice(x, x + 1)))
+            else:
+                self.bites[y, x] = left
+                if left <= config.GRASS_BITES // 2:
+                    self.level[y, x] = 1           # tupido -> ralo
         elif kind in BLOCK_KINDS and int(self.object_id[y, x]) in self.object_bites:
             self._bite(int(self.object_id[y, x]))
         else:
@@ -125,6 +147,7 @@ class EnvironmentObjects(Grid):
     def _wipe(self, idx):
         self.matrix[idx] = NONE
         self.level[idx] = 0
+        self.bites[idx] = 0
         self.object_piece[idx] = 0
         self.object_id[idx] = 0
 
@@ -151,6 +174,7 @@ class EnvironmentObjects(Grid):
         for dy, dx, piece in BLOCK_CELLS:
             self.matrix[y + dy, x + dx] = kind
             self.level[y + dy, x + dx] = 1 if kind == MANGO else 0
+            self.bites[y + dy, x + dx] = 0
             self.object_piece[y + dy, x + dx] = piece
             self.object_id[y + dy, x + dx] = oid
         self.object_bites[oid] = total_bites(kind)
@@ -172,6 +196,8 @@ class EnvironmentObjects(Grid):
             return False
         self.matrix[y, x] = kind
         self.level[y, x] = 2 if kind == GRASS else 1
+        if kind == GRASS:
+            self.bites[y, x] = config.GRASS_BITES
         return True
 
     def place_bocadillo(self, y, x, terrain_matrix, fire_matrix):
@@ -185,6 +211,7 @@ class EnvironmentObjects(Grid):
         if young.any():
             grow = young & (self.rng.random(self.matrix.shape) < config.GRASS_MATURE_PROB)
             self.level[grow] = 2
+            self.bites[grow] = config.GRASS_BITES
 
         if tick % config.GRASS_SPROUT_INTERVAL == 0 and int((self.matrix == GRASS).sum()) < self.grass_max:
             self._sprout(GRASS, config.GRASS_SPROUT_COUNT, terrain_matrix, moisture, fire_matrix)
@@ -192,12 +219,12 @@ class EnvironmentObjects(Grid):
             self._sprout(MANGO, 1, terrain_matrix, moisture, fire_matrix)
 
     def _sprout(self, kind, max_n, terrain_matrix, moisture, fire_matrix):
-        """Brota 1..max_n plantitas (nivel 1), prefiriendo celdas húmedas y cercanas a su especie.
+        """Brota 1..max_n plantitas (ralas), prefiriendo celdas húmedas y cercanas a su especie.
         El mango brota como un bloque completo de 2x2."""
         if kind in BLOCK_KINDS:
             self._sprout_block(kind, max_n, terrain_matrix, moisture, fire_matrix)
             return
-        free = (terrain_matrix == DIRT) & (fire_matrix == 0) & (self.matrix == NONE)
+        free = (terrain_matrix == DIRT) & (fire_matrix == 0) & (self.matrix == NONE) & self._zone_mask()
         near = self.get_moore_average((self.matrix == kind).astype(np.float32))
         w = np.where(free, 0.05 + moisture + near, 0.0).astype(np.float64).ravel()
         total = w.sum()
@@ -208,11 +235,12 @@ class EnvironmentObjects(Grid):
         ys, xs = np.unravel_index(idx, self.matrix.shape)
         self.matrix[ys, xs] = kind
         self.level[ys, xs] = 1
+        self.bites[ys, xs] = max(1, config.GRASS_BITES // 2)
 
     def _sprout_block(self, kind, max_n, terrain_matrix, moisture, fire_matrix):
         """Brota 1..max_n objetos 2x2 en bloques de 4 celdas libres, prefiriendo humedad y cercanía."""
         for _ in range(int(self.rng.integers(1, max_n + 1))):
-            free = (terrain_matrix == DIRT) & (fire_matrix == 0) & (self.matrix == NONE)
+            free = (terrain_matrix == DIRT) & (fire_matrix == 0) & (self.matrix == NONE) & self._zone_mask()
             ok = free[:-1, :-1] & free[:-1, 1:] & free[1:, :-1] & free[1:, 1:]
             if not ok.any():
                 return

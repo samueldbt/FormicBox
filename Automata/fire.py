@@ -1,3 +1,4 @@
+import math
 import numpy as np
 import config
 from .grid import Grid
@@ -7,12 +8,12 @@ from .objects import GRASS, MANGO, BOCADILLO
 # Fire States
 NO_FIRE, BURNING, ASH = 0, 1, -1
 
+
 class FireLayer(Grid):
     def __init__(self, width, height, seed=None):
-        """Initializes the fire state matrix and fire age tracker."""
         super().__init__(width, height, seed)
         self.matrix = np.zeros((height, width), dtype=np.int8)
-        self.age = np.zeros((height, width), dtype=np.int16)   # edad del fuego o de la ceniza
+        self.age = np.zeros((height, width), dtype=np.int16)
 
     def ignite(self, y, x, terrain_matrix, objects_matrix):
         """Start a fire in (y, x) if there is something combustible."""
@@ -35,27 +36,38 @@ class FireLayer(Grid):
         self.ignite(y, x, terrain_matrix, objects_matrix)
         return y, x
 
-    def update_fire(self, terrain_matrix, objects_matrix):
-        """Propagates fire to DIRT cells with vegetal resources, considering wind vectors.
+    def update_fire(self, terrain_matrix, objects_matrix, moisture=None):
+        """Propagación probabilística (vecindad de Moore).
+
+        - Viento: la probabilidad de cada dirección se multiplica por exp(FIRE_WIND_C * alineación con el viento);
+          además, con viento el fuego puede saltar 2 celdas a favor (FIRE_JUMP_PROB).
+        - Humedad: la probabilidad de que prenda una celda se multiplica por exp(-FIRE_MOISTURE_C * humedad),
+          y el fuego se apaga más rápido donde hay más humedad.
         La ceniza dura ASH_TICKS y luego la celda vuelve a tierra desnuda."""
         directions = [(-1, -1), (-1, 0), (-1, 1), (0, -1),
                       (0, 1), (1, -1), (1, 0), (1, 1)]
+        wx, wy = config.WIND_X, config.WIND_Y
+        burning = self.matrix > 0
 
         not_ignited = np.ones((self.height, self.width), dtype=np.float32)
-
         for dy, dx in directions:
-            norm = np.hypot(dy, dx)
-            wind_align = (config.WIND_X * dx + config.WIND_Y * dy) / norm
-            p_ign = config.FIRE_BASE_PROB * (1.0 + config.FIRE_WIND_C * wind_align)
-            p_ign = np.clip(p_ign, 0.0, 1.0)
+            wind_align = (wx * dx + wy * dy) / math.hypot(dy, dx)
+            p_ign = min(1.0, config.FIRE_BASE_PROB * math.exp(config.FIRE_WIND_C * wind_align))
+            not_ignited *= 1.0 - p_ign * self.shift_array(burning, dy, dx)
 
-            source_fire = self.shift_array(self.matrix > 0, dy, dx)
-            not_ignited *= 1.0 - (p_ign * source_fire)
+        mag = min(1.0, math.hypot(wx, wy))
+        if mag > 0 and config.FIRE_JUMP_PROB > 0:
+            sy = (wy > 0) - (wy < 0)
+            sx = (wx > 0) - (wx < 0)
+            not_ignited *= 1.0 - config.FIRE_JUMP_PROB * mag * self.shift_array(burning, 2 * sy, 2 * sx)
+
+        p_cell = 1.0 - not_ignited
+        if moisture is not None:
+            p_cell = p_cell * np.exp(-config.FIRE_MOISTURE_C * moisture)
 
         combustible = (objects_matrix == GRASS) | (objects_matrix == MANGO)
         flammable = (terrain_matrix == DIRT) & combustible & (self.matrix == NO_FIRE)
-
-        new_ignitions = flammable & (self.rng.random((self.height, self.width)) < (1.0 - not_ignited))
+        new_ignitions = flammable & (self.rng.random((self.height, self.width)) < p_cell)
 
         # Ceniza: envejece y desaparece
         ash = self.matrix == ASH
@@ -64,9 +76,13 @@ class FireLayer(Grid):
         self.matrix[expired] = NO_FIRE
         self.age[expired] = 0
 
-        # Fuego: envejece y se apaga
+        # Fuego: envejece y se apaga (antes si hay humedad)
         self.age[self.matrix > 0] += 1
-        burn_out = (self.matrix > 0) & (self.age > 5) & (self.rng.random((self.height, self.width)) < 0.3)
+        if moisture is not None:
+            burn_p = np.clip(config.FIRE_BURNOUT_BASE + config.FIRE_BURNOUT_MOISTURE * moisture, 0.0, 1.0)
+        else:
+            burn_p = config.FIRE_BURNOUT_BASE
+        burn_out = (self.matrix > 0) & (self.age > 5) & (self.rng.random((self.height, self.width)) < burn_p)
 
         self.matrix[new_ignitions] = BURNING
         self.age[new_ignitions] = 0
@@ -74,7 +90,7 @@ class FireLayer(Grid):
         self.age[burn_out] = 0
 
     def render_fire(self, terrain_matrix, objects_matrix):
-        """Console view of the fire: ^ burning, : ash, " grass, * mango, . empty dirt, # rock, ~ water, N nest."""
+        """Console view: ^ burning, : ash, " grass, * mango, . empty dirt, # rock, ~ water, N nest."""
         terrain_symbols = {ROCK: "#", WATER: "~", NEST: "N"}
         rows = []
         for y in range(self.height):

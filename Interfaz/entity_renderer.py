@@ -33,7 +33,7 @@ class EntityRenderer:
                 k = frame if (moved or ag.attacking) else 0     # quieta = frame 0
                 alive.append((ag, action, carry, k, px, py))
             else:
-                action = {"FIRE": "DEAD_FIRE", "STARVE": "DEAD_STARVE"}.get(ag.death_cause, "DEAD_FIGHT")
+                action = {"FIRE": "DEAD_FIRE", "STARVE": "DEAD_STARVE", "HUNGER": "DEAD_STARVE"}.get(ag.death_cause, "DEAD_FIGHT")
                 dead.append((ag, action, 0, 0, px, py))
 
         # Cadáveres debajo de las vivas
