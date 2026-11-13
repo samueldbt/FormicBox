@@ -1,185 +1,206 @@
 import math
 import random
 import config
+import reglas
 
 from .ant import Ant
 from Automata.objects import NONE, GRASS, MANGO, BOCADILLO
 
 
-EXPLORE_TRAIL_K = 8.0       # saturación del rastro: t / (t + K); con K=8 el 50 % se alcanza en t=8
-EXPLORE_INERTIA = 1.0       # peso de seguir el rumbo que ya llevaba
-EXPLORE_DOOR_PUSH = 2.0     # empuje hacia afuera cerca del nido
-EXPLORE_DOOR_RADIUS = 6     # hasta cuántas celdas del nido actúa ese empuje
-
-
 class Worker(Ant):
     CASTE = "WORKER"
 
-    def __init__(self, y, x, nest_pos):
-        """Inicializa una obrera con carga vacía y memoria de posición para forzar el flujo de tráfico."""
-        super().__init__(y, x, nest_pos)
+    def __init__(self, y, x, nest_pos, agents=None):
+        super().__init__(y, x, nest_pos, agents)
         self.carried_resource = NONE
+        self.trail = 0.0          # fuerza del rastro que deja al volver (1.0 al tomar, x0.97 por paso)
+        self._ignore = set()
 
-        # Memoria del último paso para evitar bucles y consolidar carriles
-        self.last_y = y
-        self.last_x = x
-
+    # ------------------------------------------------------------ tick
     def update_logic(self, automaton, occupied_mask):
-        """Ejecuta la evaluación de estado, selección de movimiento y depósito continuo de feromonas."""
         if not self.alive:
             return
         self.consume_energy()
-        self._evaluate_state(automaton)
-        self._move(automaton, occupied_mask)
+        if not self.alive:
+            return
+        self._ignore = self._ignored_kinds(automaton)
+        p = self.percept = self.perceive(automaton, self._ignore)
+        self._update_memory(automaton, p)
+        self._evaluate_state(automaton, p)
+        self._move(automaton, occupied_mask, p)
 
-        # La hormiga deposita feromonas en CADA PASO lógico si lleva un recurso
         if self.state == config.STATE_RETURN and self.carried_resource != NONE:
             self._deposit_pheromones(automaton)
 
-    def _evaluate_state(self, automaton):
-        """Actualiza el estado de la hormiga basado en peligro, energía, y recursos."""
-        # Respuesta al peligro
-        if automaton.pheromones["alarma"].matrix[self.y, self.x] > 0.5:
-            self.state = config.STATE_FLEE
-            return
+    def _ignored_kinds(self, automaton):
+        """Con el hongo estresado (demasiado azúcar) ignoran el bocadillo, salvo que tengan hambre."""
+        if automaton.colony.is_stressed() and self.energy >= config.LOW_ENERGY_THRESHOLD:
+            return {BOCADILLO}
+        return set()
 
-        # Salir de FLEE cuando ya no hay alarma: si lleva comida retoma el regreso al nido,
-        # si no, vuelve a explorar.
+    # ------------------------------------------------------------ memoria de recurso
+    def _update_memory(self, automaton, p):
+        if p.resource is not None:
+            self.mem_target = (p.resource[0], p.resource[1])
+            self.mem_ttl = config.MEMORY_TICKS
+        elif self.mem_target is not None:
+            self.mem_ttl -= 1
+            ty, tx = self.mem_target
+            visible = max(abs(ty - self.y), abs(tx - self.x)) <= config.VISION_RADIUS
+            if self.mem_ttl <= 0 or (visible and automaton.objects.matrix[ty, tx] == NONE):
+                self.mem_target = None
+
+    # ------------------------------------------------------------ transición δ (tabla de reglas)
+    def _evaluate_state(self, automaton, p):
+        for name in reglas.WORKER_RULES:
+            rule = getattr(self, "_rule_" + name.lower(), None)
+            if rule is None:
+                raise ValueError(f"reglas.py: regla desconocida {name!r}")
+            if rule(automaton, p):
+                return
+
+    def _rule_flee(self, automaton, p):
+        fire_close = p.fire_dist is not None and p.fire_dist <= config.FIRE_ALERT_RADIUS
+        if p.alarm_here > 0.5 or fire_close:
+            self.state = config.STATE_FLEE
+            return True
         if self.state == config.STATE_FLEE:
             self.state = config.STATE_RETURN if self.carried_resource != NONE else config.STATE_EXPLORE
+        return False
 
-        # Priorizar alimentación si la energía cae por debajo del umbral
-        if self.energy < config.LOW_ENERGY_THRESHOLD and self.carried_resource == NONE:
-            self.state = config.STATE_FEED
-
-        resource_here = automaton.objects.matrix[self.y, self.x]
-
-        # Llegó al nido para entregar recurso o recargar energía
-        if (self.y, self.x) == (self.nest_y, self.nest_x):
-            if self.carried_resource != NONE:
-                automaton.colony.deliver(self.carried_resource)
+    def _rule_refuel_nest(self, automaton, p):
+        if not p.at_nest:
+            return False
+        if self.carried_resource != NONE:
+            automaton.colony.deliver(self.carried_resource)
             self.carried_resource = NONE
-            self.energy = config.MAX_ENERGY
-            self.state = config.STATE_EXPLORE
+        self.trail = 0.0
+        self.refuel_at_nest(automaton, config.REFUEL_BELOW)
+        self.state = config.STATE_EXPLORE
+        return True
 
-        # Encontró un recurso mientras exploraba o buscaba comida
-        elif self.state in (config.STATE_EXPLORE, config.STATE_FEED) and resource_here != NONE:
-            if self.state == config.STATE_FEED and resource_here == BOCADILLO:
-                self.energy = config.MAX_ENERGY
+    def _rule_eat_map(self, automaton, p):
+        if (p.resource_here == BOCADILLO and self.carried_resource == NONE
+                and self.energy < config.EAT_MAP_BELOW):
+            automaton.objects.consume(self.y, self.x)        # una mordida
+            self.energy = min(config.MAX_ENERGY, self.energy + config.ENERGY_PER_FOOD["BOCADILLO"])
+            if self.state == config.STATE_FEED:
                 self.state = config.STATE_EXPLORE
-                automaton.objects.consume(self.y, self.x)   # una mordida del bocadillo
-            elif self.state == config.STATE_EXPLORE:
-                self.carried_resource = int(resource_here)
-                self.state = config.STATE_RETURN
-                automaton.objects.consume(self.y, self.x)   # pasto 2->1->vacío, mango vacío, bocadillo -1 mordida
-            # En FEED, el pasto y el mango se dejan en el mapa.
+            return True
+        return False
 
-    def _move(self, automaton, occupied_mask):
-        """Calcula probabilidades de movimiento evadiendo la celda anterior para generar caminos emergentes."""
+    def _rule_pickup(self, automaton, p):
+        kind = p.resource_here
+        if (self.carried_resource == NONE and kind != NONE and kind not in self._ignore
+                and self.state == config.STATE_EXPLORE):
+            if kind == GRASS and p.resource is not None and p.resource[2] == MANGO:
+                return False          # hay un mango a la vista: no se conforma con el pasto
+            self.carried_resource = int(kind)
+            self.trail = 1.0
+            self.state = config.STATE_RETURN
+            automaton.objects.consume(self.y, self.x)        # pasto 2->1->vacío, mango/bocadillo -1 mordida
+            return True
+        return False
+
+    def _rule_go_feed(self, automaton, p):
+        if self.carried_resource != NONE or self.state not in (config.STATE_EXPLORE, config.STATE_FEED):
+            return False
+        if self.energy < config.LOW_ENERGY_THRESHOLD and automaton.colony.has_food():
+            self.state = config.STATE_FEED
+            return True
+        if self.state == config.STATE_FEED:      # ya no hace falta (o no hay reservas): a buscar comida
+            self.state = config.STATE_EXPLORE
+        return False
+
+    def _rule_explore(self, automaton, p):
+        if self.state not in (config.STATE_RETURN, config.STATE_FEED, config.STATE_FLEE):
+            self.state = config.STATE_EXPLORE
+        return True
+
+    # ------------------------------------------------------------ salida λ: movimiento
+    def _move(self, automaton, occupied_mask, p):
         all_neighbors = self.get_valid_neighbors(automaton.terrain.matrix, automaton.fire.matrix, occupied_mask)
         if not all_neighbors:
             return
-
-        # PREVENIR BUCLES: Eliminar la celda anterior de las opciones a menos que esté acorralada
-        neighbors = []
-        for ny, nx, dy, dx in all_neighbors:
-            if (ny, nx) != (self.last_y, self.last_x) or len(all_neighbors) == 1:
-                neighbors.append((ny, nx, dy, dx))
+        neighbors = self.allowed_neighbors(all_neighbors)
 
         home_angle = self.get_home_angle()
-        heading = (self.y - self.last_y, self.x - self.last_x)   # rumbo del paso anterior
-        valid_moves = []
-        move_weights = []
+        heading = (self.y - self.last_y, self.x - self.last_x)
+        ph = automaton.pheromones
+        sugar_ok = BOCADILLO not in self._ignore
+        has_food = automaton.colony.has_food()
+        exploring = self.state == config.STATE_EXPLORE or (self.state == config.STATE_FEED and not has_food)
+        t_here = float(ph["vegetal"].matrix[self.y, self.x]
+                       + (ph["azucar"].matrix[self.y, self.x] if sugar_ok else 0.0))
 
+        moves, weights = [], []
         for ny, nx, dy, dx in neighbors:
-            move_angle = math.atan2(dy, dx)
-            home_alignment = math.cos(home_angle - move_angle)
-
-            t_veg = automaton.pheromones["vegetal"].matrix[ny, nx]
-            t_sug = automaton.pheromones["azucar"].matrix[ny, nx]
-            t_alarm = automaton.pheromones["alarma"].matrix[ny, nx]
+            home_alignment = math.cos(home_angle - math.atan2(dy, dx))
+            t_veg = float(ph["vegetal"].matrix[ny, nx])
+            t_sug = float(ph["azucar"].matrix[ny, nx])
+            t_alarm = float(ph["alarma"].matrix[ny, nx])
             r_fire = 1.0 if automaton.fire.matrix[ny, nx] > 0 else 0.0
 
-            wv, wa, wh = 0.0, 0.0, 0.0
-
-            # Asignación de pesos según la casta y el estado biológico
-            if self.state == config.STATE_EXPLORE:
-                wv, wa = config.WEIGHT_VEGETAL, config.WEIGHT_SUGAR
+            if exploring:
+                score = self._score_explore(ny, nx, dy, dx, t_veg, t_sug, t_here, home_alignment, heading, sugar_ok)
             elif self.state == config.STATE_FEED:
-                # Hambrienta: vuelve al nido a recargar (ahí recupera MAX_ENERGY).
-                # Si de camino huele azúcar (un bocadillo), también la atrae.
-                wa = config.WEIGHT_SUGAR * 2.0
-                wh = config.WEIGHT_HOME
+                score = config.WEIGHT_HOME * home_alignment + (config.WEIGHT_SUGAR * 2.0 * t_sug if sugar_ok else 0.0)
             elif self.state == config.STATE_RETURN:
-                wh = config.WEIGHT_HOME
-            elif self.state == config.STATE_FLEE:
-                wh = -config.WEIGHT_HOME
+                score = config.WEIGHT_HOME * home_alignment
+            else:  # FLEE: lejos del fuego y hacia el nido
+                heat = self.fire_heat(automaton, ny, nx)
+                score = config.WEIGHT_FLEE * (1.0 - heat) + 0.5 * config.WEIGHT_HOME * home_alignment
 
-            r_val = random.random()
+            score += -(config.WEIGHT_ALARM * t_alarm) - (config.WEIGHT_FIRE * r_fire) \
+                     + config.WEIGHT_RANDOM * random.random()
+            moves.append((ny, nx))
+            weights.append(max(0.001, score) ** 3)
 
-            # Ecuación central de probabilidad P
-            if self.state == config.STATE_EXPLORE:
-                # La exploración usa su propia regla (ver _score_explore)
-                score = self._score_explore(ny, nx, dy, dx, t_veg, t_sug, home_alignment, heading) \
-                        - (config.WEIGHT_ALARM * t_alarm) - (config.WEIGHT_FIRE * r_fire) \
-                        + (config.WEIGHT_RANDOM * r_val)
-            else:
-                score = (wv * t_veg) + (wa * t_sug) + (wh * home_alignment) \
-                        - (config.WEIGHT_ALARM * t_alarm) - (config.WEIGHT_FIRE * r_fire) \
-                        + (config.WEIGHT_RANDOM * r_val)
+        self.commit_move(*random.choices(moves, weights=weights, k=1)[0])
 
-            # CONTRASTE MATEMÁTICO: Elevar la probabilidad al cubo para aplastar el ruido y consolidar la autopista
-            final_prob = max(0.001, score) ** 3
+    def _score_explore(self, ny, nx, dy, dx, t_veg, t_sug, t_here, home_alignment, heading, sugar_ok):
+        """Puntaje de una celda vecina al explorar: rastro saturado + subir la pendiente
+        + inercia + empuje de salida + atracción al recurso visto/recordado."""
+        K = config.EXPLORE_TRAIL_K
+        ws = config.WEIGHT_SUGAR if sugar_ok else 0.0
+        t_sug = t_sug if sugar_ok else 0.0
 
-            valid_moves.append((ny, nx))
-            move_weights.append(final_prob)
+        rastro = config.WEIGHT_VEGETAL * (t_veg / (t_veg + K)) + ws * (t_sug / (t_sug + K))
+        t_new = t_veg + t_sug
+        K = config.EXPLORE_TRAIL_K
+        ws = config.WEIGHT_SUGAR if sugar_ok else 0.0
+        t_sug = t_sug if sugar_ok else 0.0
 
-        # Guardar la posición actual en la memoria antes de efectuar la traslación lógica
-        self.last_y, self.last_x = self.y, self.x
+        rastro = config.WEIGHT_VEGETAL * (t_veg / (t_veg + K)) + ws * (t_sug / (t_sug + K))
+        t_new = t_veg + t_sug
+        rastro += config.TRAIL_CLIMB * (t_new - t_here) / (t_new + t_here + 0.02)   # -1..1: sube o baja la pendient
 
-        # Ejecutar la selección probabilística del movimiento
-        chosen_move = random.choices(valid_moves, weights=move_weights, k=1)[0]
-        self.y, self.x = chosen_move
-
-    def _score_explore(self, ny, nx, dy, dx, t_veg, t_sug, home_alignment, heading):
-        """Puntaje de una celda vecina para una hormiga que explora (sin alarma, fuego ni azar).
-
-        Resuelve el 'bucle de feromonas': el rastro de las que vuelven se acumula cerca del
-        nido, así que el gradiente apunta HACIA el nido y las exploradoras rebotaban en la
-        puerta. Cuatro cambios:
-          1. Rastro saturado, t/(t+K): una concentración enorme ya no aplasta al resto de
-             términos (antes, al elevar al cubo, ganaba siempre la celda más cargada).
-          2. Solo se sigue el rastro hacia afuera: se pondera por (afuera + 1) / 2, que vale
-             1 si el paso se aleja del nido, 0.5 si es de lado y 0 si vuelve hacia él.
-          3. Inercia: premia seguir el rumbo anterior, lo que da trayectos rectos y alcanza
-             más lejos que un paseo al azar.
-          4. Empuje de salida: cerca del nido, premia alejarse, para no quedarse en la puerta.
-        """
-        afuera = -home_alignment
-
-        # 1 y 2: rastro saturado y solo hacia afuera
-        rastro = (config.WEIGHT_VEGETAL * (t_veg / (t_veg + EXPLORE_TRAIL_K))
-                  + config.WEIGHT_SUGAR * (t_sug / (t_sug + EXPLORE_TRAIL_K)))
-        rastro *= (afuera + 1.0) / 2.0
-
-        # 3: inercia (coseno entre el paso candidato y el rumbo anterior)
         hy, hx = heading
         if hy or hx:
-            inercia = EXPLORE_INERTIA * (dy * hy + dx * hx) / (math.hypot(dy, dx) * math.hypot(hy, hx))
+            inercia = config.EXPLORE_INERTIA * (dy * hy + dx * hx) / (math.hypot(dy, dx) * math.hypot(hy, hx))
         else:
             inercia = 0.0
 
-        # 4: empuje de salida, que se desvanece al alejarse del nido
+        afuera = -home_alignment
         d_nido = max(abs(ny - self.nest_y), abs(nx - self.nest_x))
-        puerta = EXPLORE_DOOR_PUSH * max(0.0, 1.0 - d_nido / EXPLORE_DOOR_RADIUS) * afuera
+        puerta = config.EXPLORE_DOOR_PUSH * max(0.0, 1.0 - d_nido / config.EXPLORE_DOOR_RADIUS) * afuera
 
-        return rastro + inercia + puerta
+        objetivo = 0.0
+        if self.mem_target is not None:
+            ty, tx = self.mem_target
+            d_now = abs(self.y - ty) + abs(self.x - tx)
+            d_new = abs(ny - ty) + abs(nx - tx)
+            objetivo = config.WEIGHT_RESOURCE * (d_now - d_new + 1.0) / 2.0   # 1 si se acerca, 0 si se aleja
 
+        return rastro + inercia + puerta + objetivo
+
+    # ------------------------------------------------------------ salida λ: feromona
     def _deposit_pheromones(self, automaton):
-        """Inyecta el peso específico del recurso transportado a la capa química del autómata."""
+        """Rastro con dirección: deja `trail` (1.0 al salir del recurso) y lo multiplica por 0.97 en cada paso."""
         if self.carried_resource == GRASS:
-            automaton.deposit_pheromone("vegetal", self.y, self.x, config.DEPOSIT_AMOUNT_GRASS)
+            automaton.deposit_pheromone("vegetal", self.y, self.x, config.DEPOSIT_AMOUNT_GRASS * self.trail)
         elif self.carried_resource == MANGO:
-            automaton.deposit_pheromone("vegetal", self.y, self.x, config.DEPOSIT_AMOUNT_MANGO)
+            automaton.deposit_pheromone("vegetal", self.y, self.x, config.DEPOSIT_AMOUNT_MANGO * self.trail)
         elif self.carried_resource == BOCADILLO:
-            automaton.deposit_pheromone("azucar", self.y, self.x, config.DEPOSIT_AMOUNT_BOCADILLO)
+            automaton.deposit_pheromone("azucar", self.y, self.x, config.DEPOSIT_AMOUNT_BOCADILLO * self.trail)
+        self.trail *= config.TRAIL_DECAY

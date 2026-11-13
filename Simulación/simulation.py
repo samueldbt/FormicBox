@@ -4,7 +4,8 @@ from collections import deque
 import numpy as np
 import config
 from Automata.automaton import CellularAutomaton
-from Automata.terrain import DIRT, ROCK, WATER
+from Automata.scenario import get_scenario
+from Automata.terrain import DIRT, ROCK, WATER, NEST
 from Automata.objects import GRASS, MANGO, BOCADILLO
 from Automata.fire import BURNING, ASH
 from Hormigas.worker import Worker
@@ -12,31 +13,43 @@ from Hormigas.soldier import Soldier
 from Hormigas.marabunta import Marabunta
 
 CASTES = {"WORKER": Worker, "SOLDIER": Soldier, "MARABUNTA": Marabunta}
+_KEEP = object()
 
 
 class Simulation:
-    def __init__(self, seed=None):
+    def __init__(self, seed=None, scenario=None):
         self.seed = config.SEED if seed is None else seed
+        self.scenario = scenario
         self.reset()
 
-    def reset(self, seed=None):
+    def reset(self, seed=None, scenario=_KEEP):
+        """scenario: None = mapa aleatorio, id o Scenario = prefijado, sin pasarlo = conserva el actual."""
+        if scenario is not _KEEP:
+            self.scenario = scenario
         if seed is not None:
             self.seed = seed
-        random.seed(self.seed)                    # los agentes usan el módulo random
-        self.automaton = CellularAutomaton(config.WIDTH, config.HEIGHT, self.seed)
-        self.agents = []                          # lista COMPARTIDA con soldadas/marabuntas: solo se muta en sitio
+        if self.scenario is not None:
+            self.seed = get_scenario(self.scenario).seed      # los escenarios fijan su semilla
+        random.seed(self.seed)                                # los agentes usan el módulo random
+        self.automaton = CellularAutomaton(config.WIDTH, config.HEIGHT, self.seed, scenario=self.scenario)
+        self.agents = []                                      # lista COMPARTIDA: solo se muta en sitio
         self.tick = 0
-        self.version = 0                          # sube con cada cambio del mundo (cachés del render)
-        self.terrain_version = 0                  # sube al poner/borrar roca o agua
-        self.last_error = ""                      # mensaje para la interfaz
+        self.version = 0
+        self.terrain_version = 0
+        self.last_error = ""
         self.game_over = False
-        self.events = []                          # eventos de sonido (tarea opcional)
+        self.events = []
         self.deaths = {"WORKER": 0, "SOLDIER": 0, "MARABUNTA": 0}
         self._starve_timer = 0
         self.traffic = np.zeros((self.automaton.height, self.automaton.width), dtype=np.float32)
         castes = ["WORKER"] * config.INITIAL_WORKERS + ["SOLDIER"] * config.INITIAL_SOLDIERS
         random.shuffle(castes)
-        self.queue = deque(castes)                # población inicial: sale del nido de a poco, sin costo
+        self.queue = deque(castes)
+        self.scout = None                 # la primera hormiga en salir
+        self.scout_tick = 0
+        self.last_exit = -10 ** 9
+        self.gate_open = False            # se abre cuando la exploradora entrega comida
+        self.waiting_scout = False
 
     @property
     def nest(self):
@@ -69,15 +82,14 @@ class Simulation:
                 ag.die("FIRE")
 
         # 3. Salida escalonada del nido (población inicial)
-        for _ in range(config.SPAWN_PER_TICK):
-            if self.queue:
-                self.agents.append(self._make(self.queue.popleft(), *nest))
+        self._release_queue(nest)
 
-        # 3b. Nacimientos desde reservas y hambre
+        # 3b. Crías que maduran, nuevas crías y hambre del hongo
+        self._mature_brood()
         self._births()
         self._hunger()
 
-        # 4. Agentes, en orden aleatorio, actualizando la ocupación tras cada movimiento
+        # 4. Agentes en orden ALEATORIO cada tick (sin sesgo de movimiento)
         pass_mode = config.COLLISION_MODE == "allies_pass"
         if pass_mode:
             cnt, masks = self._group_masks()
@@ -94,7 +106,6 @@ class Simulation:
             new = (ag.y, ag.x)
             if new != old:
                 if pass_mode:
-                    # esta hormiga es vista como ocupada por el grupo contrario
                     other = "ALLY" if group == "MARA" else "MARA"
                     if old != nest:
                         cnt[other][old] -= 1
@@ -105,46 +116,77 @@ class Simulation:
                 else:
                     occupied[old] = False
                     occupied[new] = new != nest
-                ag.facing = (new[0] - old[0], new[1] - old[1])
+                if not ag.attacking:              # si muerde, conserva la orientación hacia la presa
+                    ag.facing = (new[0] - old[0], new[1] - old[1])
 
-        # 5. Las que murieron dejan alarma (una sola vez) y se cuentan las bajas
+        # 5. Las que murieron: se cuentan y, si fue en combate o fuego, dejan alarma (una vez)
         for ag in self.agents:
             if not ag.alive and not ag.death_handled:
                 ag.death_handled = True
                 self.deaths[ag.CASTE] += 1
-                if ag.CASTE != "MARABUNTA":
+                if ag.CASTE != "MARABUNTA" and ag.death_cause in ("FIGHT", "FIRE"):
                     a.deposit_pheromone("alarma", ag.y, ag.x, config.DEPOSIT_AMOUNT_DEATH_ALARM)
 
-        # 6. Mapa de tráfico (por dónde pasan las obreras)
+        # 6. Mapa de tráfico
         self.traffic *= config.TRAFFIC_DECAY
         for ag in self.agents:
             if ag.alive and ag.CASTE == "WORKER" and (ag.y, ag.x) != nest:
                 self.traffic[ag.y, ag.x] += 1.0
 
-        # 7. Game over: ninguna obrera viva (ni en cola) y sin reservas para una nueva
+        # 7. Game over: ninguna obrera viva, en cola ni en desarrollo, y sin reservas para una nueva
+        c = a.colony
         workers_alive = any(ag.alive and ag.CASTE == "WORKER" for ag in self.agents)
-        workers_queued = "WORKER" in self.queue
-        if not workers_alive and not workers_queued and not a.colony.can_afford("WORKER"):
+        if (not workers_alive and "WORKER" not in self.queue
+                and c.brood_count("WORKER") == 0 and not c.can_afford("WORKER")):
             self.game_over = True
 
-    # ------------------------------------------------------------ nacimientos y hambre
+    # ------------------------------------------------------------ crías y hambre
     def _population(self):
         n = sum(1 for ag in self.agents if ag.alive and ag.CASTE != "MARABUNTA")
-        return n + len(self.queue)
+        return n + len(self.queue) + self.automaton.colony.brood_count()
+
+    def _mature_brood(self):
+        for caste in self.automaton.colony.tick_brood():
+            self.agents.append(self._make(caste, *self.nest))
+
+    def _release_queue(self, nest):
+        """Sale 1 hormiga cada SPAWN_INTERVAL ticks. La primera (una obrera) sale sola;
+        las demás esperan a que entregue comida al nido (o a que pase SCOUT_TIMEOUT)."""
+        self.waiting_scout = False
+        if not self.queue:
+            return
+        if not self.gate_open:
+            delivered = sum(self.automaton.colony.delivered.values()) > 0
+            timed_out = self.scout is not None and self.tick - self.scout_tick > config.SCOUT_TIMEOUT
+            if delivered or timed_out:
+                self.gate_open = True
+            elif self.scout is not None and self.scout.alive:
+                self.waiting_scout = True
+                return
+        if self.tick - self.last_exit < config.SPAWN_INTERVAL:
+            return
+        caste = "WORKER" if "WORKER" in self.queue else self.queue[0]
+        self.queue.remove(caste)
+        ag = self._make(caste, *nest)
+        self.agents.append(ag)
+        self.last_exit = self.tick
+        if not self.gate_open:               # la que sale ahora es la exploradora (o su reemplazo si murió)
+            self.scout, self.scout_tick = ag, self.tick
 
     def _births(self):
-        if self.queue or self.tick % config.BIRTH_INTERVAL != 0:
+        """El excedente (sobre la reserva de 3 ciclos del hongo) se convierte en crías en desarrollo."""
+        colony = self.automaton.colony
+        if self.queue or self.tick % config.BIRTH_INTERVAL != 0 or colony.starving:
             return
         if self._population() >= config.MAX_POPULATION:
             return
-        colony = self.automaton.colony
         caste = "SOLDIER" if random.random() < config.BIRTH_SOLDIER_RATIO else "WORKER"
-        if caste == "SOLDIER" and not colony.can_afford("SOLDIER"):
+        if caste == "SOLDIER" and not colony.can_afford("SOLDIER", keep_reserve=True):
             caste = "WORKER"
-        if colony.pay(caste):
-            self.agents.append(self._make(caste, *self.nest))
+        colony.start_brood(caste, keep_reserve=True)
 
     def _hunger(self):
+        """Si el hongo no tiene qué comer, una hormiga muere cada STARVATION_INTERVAL ticks."""
         if self.automaton.colony.upkeep():
             self._starve_timer = 0
             return
@@ -165,9 +207,7 @@ class Simulation:
         return m
 
     def _group_masks(self):
-        """Modo 'allies_pass': conteos por celda y una máscara por grupo.
-        ALLY (obreras+soldadas) ve marabuntas vivas y cadáveres.
-        MARA (marabuntas) ve obreras/soldadas vivas y cadáveres."""
+        """Modo 'allies_pass': ALLY ve marabuntas y cadáveres; MARA ve obreras/soldadas y cadáveres."""
         shape = (self.automaton.height, self.automaton.width)
         cnt = {"ALLY": np.zeros(shape, dtype=np.int16), "MARA": np.zeros(shape, dtype=np.int16)}
         for ag in self.agents:
@@ -184,9 +224,7 @@ class Simulation:
         return cnt, masks
 
     def _make(self, caste, y, x):
-        nest = self.nest
-        cls = CASTES[caste]
-        return cls(y, x, nest) if caste == "WORKER" else cls(y, x, nest, self.agents)
+        return CASTES[caste](y, x, self.nest, self.agents)
 
     # ------------------------------------------------------------ API de depuración / Modo Dios
     def agent_at(self, y, x):
@@ -202,9 +240,13 @@ class Simulation:
         a = self.automaton
         if a.terrain.matrix[y, x] != DIRT or a.fire.matrix[y, x] > 0 or self.agent_at(y, x):
             return False
-        if caste in ("WORKER", "SOLDIER") and not a.colony.pay(caste):
-            self.last_error = "Reservas insuficientes"
-            return False
+        if caste in ("WORKER", "SOLDIER"):
+            if a.colony.starving:
+                self.last_error = "Hongo sin comida: spawn bloqueado"
+                return False
+            if not a.colony.pay(caste):
+                self.last_error = "Reservas insuficientes"
+                return False
         self.agents.append(self._make(caste, y, x))
         self.version += 1
         return True
@@ -260,7 +302,8 @@ class Simulation:
 
     # ------------------------------------------------------------ piedra y agua
     def place_terrain(self, kind, y, x):
-        """kind = ROCK, WATER o DIRT. No sobre el nido ni sobre una hormiga."""
+        """kind = ROCK, WATER o DIRT. No sobre el nido ni sobre una hormiga.
+        Delega en CellularAutomaton.place_terrain (conectividad, humedad y campos del nido)."""
         a = self.automaton
         if kind not in (DIRT, ROCK, WATER):
             return False
@@ -269,14 +312,12 @@ class Simulation:
         if (y, x) == self.nest or self.agent_at(y, x):
             self.last_error = "No se puede poner terreno ahí"
             return False
-        a.terrain.matrix[y, x] = kind
-        mask = np.zeros((a.height, a.width), dtype=bool)
-        mask[y, x] = True
-        a.objects.clear_mask(mask)                # borra pasto o el mango/bocadillo completo
-        a.fire.matrix[y, x] = 0
-        a.terrain.moisture[:] = 0                 # reinicia para que el agua borrada deje de mojar
-        a.terrain._calculate_static_moisture()
-        a.recompute_fields()
+        if not a.place_terrain(y, x, kind):
+            return False
+        # Quien quedó sobre roca/agua (zona sellada) muere
+        for ag in self.agents:
+            if ag.alive and a.terrain.matrix[ag.y, ag.x] not in (DIRT, NEST):
+                ag.die("FIGHT")
         self.version += 1
         self.terrain_version += 1
         return True
@@ -301,16 +342,19 @@ class Simulation:
         for ag in self.agents:
             if ag.alive:
                 c[ag.CASTE] += 1
-        d = a.colony.delivered
+        d, s = a.colony.delivered, a.colony.stock
         return {
             **c,
             "tick": self.tick,
             "queued": len(self.queue),
             "grass": int((a.objects.matrix == GRASS).sum()),
-            "mango": a.objects.count(MANGO),      # objetos 2x2, no celdas
+            "mango": a.objects.count(MANGO),
             "bocadillos": len(a.objects.bocadillo_bites),
             "delivered": (d[GRASS], d[MANGO], d[BOCADILLO]),
-            "stock": dict(a.colony.stock),
+            "stock": (s[GRASS], s[MANGO], s[BOCADILLO]),
+            "brood": a.colony.brood_count(),
+            "starving": a.colony.starving,
+            "stressed": a.colony.is_stressed(),
             "burning": int((a.fire.matrix == BURNING).sum()),
             "ash": int((a.fire.matrix == ASH).sum()),
         }

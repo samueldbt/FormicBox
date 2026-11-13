@@ -63,7 +63,7 @@ class DebugTools:
         k = int(a.objects.matrix[y, x])
         obj = OBJECT_NAMES[k] + (f" nivel {int(a.objects.level[y, x])}" if k == GRASS else "")
         fire = {0: "-", 1: "ARDIENDO", -1: "ceniza"}[int(a.fire.matrix[y, x])]
-        ph = "/".join(f"{a.pheromones[n].matrix[y, x]:.1f}" for n in ("vegetal", "azucar", "alarma", "caza"))
+        ph = "/".join(f"{a.pheromones[n].matrix[y, x]:.2f}" for n in ("vegetal", "azucar", "alarma", "caza"))
         lines = [f"Celda ({y},{x})  {TERRAIN_NAMES[int(a.terrain.matrix[y, x])]}  hum {a.terrain.moisture[y, x]:.2f}",
                  f"Objeto: {obj}   Fuego: {fire}",
                  f"Feromonas V/A/AL/C: {ph}"]

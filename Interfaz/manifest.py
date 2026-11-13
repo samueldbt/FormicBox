@@ -39,12 +39,14 @@ ANTS = {
         ("WALK", 3): "worker/walk_bocadillo_{i}.png",
         ("DEAD_FIGHT", 0): "worker/dead_fight.png",
         ("DEAD_FIRE", 0): "worker/dead_fire.png",
+        ("DEAD_STARVE", 0): "worker/dead_starve.png",      
     },
     "SOLDIER": {
         ("WALK", 0): "soldier/walk_{i}.png",
         ("ATTACK", 0): "soldier/attack_{i}.png",
         ("DEAD_FIGHT", 0): "soldier/dead_fight.png",
         ("DEAD_FIRE", 0): "soldier/dead_fire.png",
+        ("DEAD_STARVE", 0): "soldier/dead_starve.png",     
     },
     "MARABUNTA": {
         ("WALK", 0): "marabunta/walk_{i}.png",

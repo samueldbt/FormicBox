@@ -198,10 +198,13 @@ class Game:
             f"Tick {st['tick']}  {'[PAUSA]' if self.paused else ''}  seed {self.sim.seed}",
             f"Obreras {st['WORKER']}  Soldadas {st['SOLDIER']}  Marab. {st['MARABUNTA']}",
             f"En cola de salida: {st['queued']}",
+            f"Salida: {'esperando a la exploradora' if self.sim.waiting_scout else 'libre'}",
             f"Pasto {st['grass']}  Mango {st['mango']}  Bocad. {st['bocadillos']}",
-            f"Entregado P/M/B: {st['delivered'][0]}/{st['delivered'][1]}/{st['delivered'][2]}",
+            f"Reserva P/M/B: {st['stock'][0]}/{st['stock'][1]}/{st['stock'][2]}  Crias {st['brood']}",
+            f"Hongo: {'ESTRESADO' if st['stressed'] else 'normal'} {'| HAMBRE' if st['starving'] else ''}",
             f"Fuego {st['burning']}  Ceniza {st['ash']}",
             f"Viento ({config.WIND_X:.1f}, {config.WIND_Y:.1f})",
+            f"Feromona veg: {self.sim.automaton.pheromones['vegetal'].mode}  evap {self.sim.automaton.pheromones['vegetal'].evap_rate}",
         ], x, y)
         y = self._text([self.tools.message], x, y + 4, (255, 220, 140))
 

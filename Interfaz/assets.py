@@ -4,7 +4,8 @@ import numpy as np
 import pygame
 import config
 from . import manifest
-from .autotile import BASE_MASKS, rotl4
+from Automata.autotile import BASE_MASKS, rotl4
+from Automata.objects import MANGO, BOCADILLO
 
 # facing (dy, dx) -> índice de dirección. El arte mira arriba; las demás son rotaciones horarias.
 DIR_INDEX = {(-1, 0): 0, (0, 1): 1, (1, 0): 2, (0, -1): 3}
@@ -37,7 +38,8 @@ class AssetManager:
         self._warned = set()
         self.autotiles = {}        # familia -> np.array de 16 ids, indexado por máscara
         self.anim = {}             # (casta, acción, carga, dirección) -> tupla de 6 ids
-        self.bocadillo = [None] * 5   # 1..4
+        self.block_big = {}        # tipo -> Surface 2T x 2T del arte real (o None si falta)
+        self._block_cache = {}     # (tipo, mordidas, total) -> Surface
         self.fire = []
 
         self._load_tiles()
@@ -89,14 +91,39 @@ class AssetManager:
         self.nest = self._tile("nest", self._ph_nest)
         self.ash = self._tile("ash", lambda: self._solid(config.COLOR_ASH, 170))
         self.grass1 = self._tile("grass1", self._ph_grass1)
-        self.mango = self._tile("mango", self._ph_mango)
 
-        # Bocadillo: una imagen -> 2T x 2T -> 4 trozos de T x T
+        # Mango y bocadillo: una imagen -> 2T x 2T. Si falta el arte, se dibuja un placeholder.
         T = self.T
-        img = self._read(manifest.BOCADILLO)
-        big = pygame.transform.scale(img, (2 * T, 2 * T)) if img else self._ph_bocadillo()
-        for i, (dy, dx) in enumerate(((0, 0), (0, 1), (1, 0), (1, 1)), start=1):
-            self.bocadillo[i] = self.add(big.subsurface((dx * T, dy * T, T, T)).copy())
+        for kind, rel in ((MANGO, manifest.TILES["mango"]), (BOCADILLO, manifest.BOCADILLO)):
+            img = self._read(rel)
+            self.block_big[kind] = pygame.transform.scale(img, (2 * T, 2 * T)) if img else None
+
+    def block_surface(self, kind, left, total):
+        """Imagen 2x2 del objeto según las mordidas que le quedan (con caché)."""
+        key = (kind, left, total)
+        s = self._block_cache.get(key)
+        if s is None:
+            s = self._block_cache[key] = self._make_block(kind, left, total)
+        return s
+
+    def _make_block(self, kind, left, total):
+        size = 2 * self.T
+        frac = max(0.0, min(1.0, left / max(1, total)))
+        dark = 0.45 + 0.55 * frac                       # se oscurece al morderlo
+        art = self.block_big.get(kind)
+        if art is not None:
+            s = art.copy()
+            v = int(255 * dark)
+            s.fill((v, v, v, 255), special_flags=pygame.BLEND_RGBA_MULT)
+            return s
+        base = config.COLOR_MANGO_BLOCK if kind == MANGO else config.COLOR_BOCADILLO_BLOCK
+        col = tuple(int(c * dark) for c in base)
+        inset = int((1.0 - frac) * 0.30 * size) + 3     # y se encoge
+        rect = pygame.Rect(inset, inset, size - 2 * inset, size - 2 * inset)
+        s = pygame.Surface((size, size), pygame.SRCALPHA)
+        pygame.draw.rect(s, col, rect, border_radius=8)
+        pygame.draw.rect(s, (255, 255, 255), rect, 2, border_radius=8)
+        return s
 
     def _load_autotiles(self):
         for fam, pattern in manifest.AUTOTILE.items():
@@ -165,20 +192,6 @@ class AssetManager:
             pygame.draw.line(s, config.COLOR_GRASS, (x, y), (x + 2, y - 6), 2)
         return s
 
-    def _ph_mango(self):
-        s = self._surf()
-        c = self.T // 2
-        pygame.draw.circle(s, config.COLOR_MANGO, (c, c + 2), 9)
-        pygame.draw.ellipse(s, config.COLOR_GRASS, (c, c - 12, 8, 5))
-        return s
-
-    def _ph_bocadillo(self):
-        T = self.T
-        s = pygame.Surface((2 * T, 2 * T), pygame.SRCALPHA)
-        pygame.draw.rect(s, config.COLOR_BOCADILLO, (6, 6, 2 * T - 12, 2 * T - 12), border_radius=8)
-        pygame.draw.rect(s, (255, 255, 255), (6, 6, 2 * T - 12, 2 * T - 12), 2, border_radius=8)
-        return s
-
     def _ph_fire(self, k):
         T = self.T
         s = self._surf()
@@ -211,6 +224,8 @@ class AssetManager:
             col = (120, 120, 120)
         elif action == "DEAD_FIRE":
             col = (35, 35, 35)
+        elif action == "DEAD_STARVE":
+            col = (150, 120, 60)
         off = 2 if k % 2 == 0 else -2          # las patas alternan por frame
         for dy in (-5, 0, 5):
             pygame.draw.line(s, col, (c - hw, c + dy), (c - hw - 5, c + dy + off), 2)

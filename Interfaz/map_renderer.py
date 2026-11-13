@@ -3,9 +3,9 @@ import numpy as np
 import pygame
 import config
 from Automata.terrain import ROCK, WATER, NEST
-from Automata.objects import NONE, GRASS, MANGO
+from Automata.objects import NONE, GRASS, BLOCK_KINDS, total_bites
 from Automata.fire import BURNING, ASH
-from .autotile import masks
+from Automata.autotile import masks
 
 LAYER_NAMES = ("vegetal", "azucar", "alarma", "caza")
 
@@ -29,7 +29,7 @@ class MapRenderer:
         self.rebuild()
 
     def rebuild(self):
-        """Recalcula lo estático (terreno). Llamar tras reiniciar la simulación."""
+        """Recalcula lo estático (terreno). Llamar tras reiniciar la simulación o cambiar terreno."""
         A = self.A
         t = self.sim.automaton.terrain.matrix
         self.base = np.full(t.shape, A.dirt, dtype=np.int32)
@@ -72,30 +72,37 @@ class MapRenderer:
                     blits.append((sp[over[j][i]], (px, py)))
         surf.blits(blits)
 
-        # 2. Feromonas y overlays (encima de la tierra, debajo de objetos y hormigas)
+        # 2. Feromonas y overlays
         self._draw_overlays(surf, cam, sl, x0, y0)
 
-        # 3. Objetos
+        # 3. Pasto (celdas sueltas)
         o = a.objects
         kind, lvl = o.matrix[sl].tolist(), o.level[sl].tolist()
-        piece, dense = o.bocadillo_piece[sl].tolist(), self._dense_ids()[sl].tolist()
+        dense = self._dense_ids()[sl].tolist()
         blits = []
         for j in range(rows):
             py = (y0 + j) * T + oy
             for i in range(cols):
-                k = kind[j][i]
-                if k == NONE:
+                if kind[j][i] != GRASS:
                     continue
-                if k == GRASS:
-                    spr = dense[j][i] if lvl[j][i] >= 2 else self.A.grass1
-                elif k == MANGO:
-                    spr = self.A.mango
-                else:
-                    spr = self.A.bocadillo[piece[j][i]]
+                spr = dense[j][i] if lvl[j][i] >= 2 else self.A.grass1
                 blits.append((sp[spr], ((x0 + i) * T + ox, py)))
         surf.blits(blits)
 
-        # 4. Fuego y ceniza (cada llama con su fase para que no latan todas a la vez)
+        # 3b. Mango y bocadillo: UNA imagen de 2x2 tiles por objeto, que cambia con las mordidas
+        by0, bx0 = max(0, y0 - 1), max(0, x0 - 1)
+        blits = []
+        for j, i in np.argwhere(o.object_piece[by0:y1, bx0:x1] == 1).tolist():
+            y, x = by0 + j, bx0 + i
+            oid = int(o.object_id[y, x])
+            k = o.object_kind.get(oid)
+            if k is None:
+                continue
+            spr = self.A.block_surface(k, o.object_bites.get(oid, 1), total_bites(k))
+            blits.append((spr, (x * T + ox, y * T + oy)))
+        surf.blits(blits)
+
+        # 4. Fuego y ceniza
         frame = min(config.ANIM_FRAMES - 1, int(s * config.ANIM_FRAMES))
         fire, phase = a.fire.matrix[sl].tolist(), self.phase[sl].tolist()
         blits = []

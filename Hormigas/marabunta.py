@@ -46,13 +46,9 @@ class Marabunta(Ant):
         self.state = STATE_RAID
         self.carried_resource = NONE      # la interfaz dibuja según este atributo
         self.health = MARABUNTA_HEALTH
-        self.agents = agents if agents is not None else []
         self.prey = None                  # agente que está atacando
         self.raid_ticks = 0
         self.kills = 0
-
-        self.last_y = y
-        self.last_x = x
 
     @staticmethod
     def spawn_position(automaton):
@@ -148,8 +144,7 @@ class Marabunta(Ant):
         if not all_neighbors:
             return
 
-        neighbors = [(ny, nx, dy, dx) for ny, nx, dy, dx in all_neighbors
-                     if (ny, nx) != (self.last_y, self.last_x) or len(all_neighbors) == 1]
+        neighbors = self.allowed_neighbors(all_neighbors)
 
         nest_angle = self.get_home_angle()
         heading = (self.y - self.last_y, self.x - self.last_x)
@@ -179,8 +174,7 @@ class Marabunta(Ant):
             valid_moves.append((ny, nx))
             move_weights.append(max(0.001, score) ** 3)
 
-        self.last_y, self.last_x = self.y, self.x
-        self.y, self.x = random.choices(valid_moves, weights=move_weights, k=1)[0]
+        self.commit_move(*random.choices(valid_moves, weights=move_weights, k=1)[0])
 
     @staticmethod
     def _inertia(dy, dx, heading):
