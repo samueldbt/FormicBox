@@ -2,270 +2,136 @@
 
 **Modelo híbrido de autómata celular y agentes para la simulación de una colonia de hormigas**
 
-Proyecto de la asignatura *Autómatas y Lenguajes Formales*.
+Proyecto de la asignatura *Autómatas y Lenguajes Formales* — UIS.
 
-FormicBox es una simulación interactiva de una colonia de hormigas en un entorno bidimensional discreto. El **ambiente** (terreno, fuego, feromonas) se modela como un autómata celular, y las **hormigas** son agentes individuales que consultan y modifican ese ambiente. De reglas locales simples emerge comportamiento colectivo: rutas de forrajeo, "autopistas" de tráfico, defensa y respuesta ante incendios e invasiones.
+FormicBox simula una colonia de hormigas cortadoras de hojas en un mapa 2D discreto. El **ambiente** (terreno, recursos, feromonas, fuego, humedad y clima) es un **autómata celular**; las **hormigas** son **agentes** cuyo comportamiento se modela como una **máquina de Mealy** que lee el ambiente y lo modifica. Sin control central emergen rutas de forrajeo, líneas de tráfico, defensa del nido y respuesta ante incendios e invasiones.
 
-> **Nota de alcance:** la biología de referencia son las hormigas cortadoras de hojas (*Atta* spp.), con elementos culturales de la hormiga culona santandereana. "Hormiga culona" se conserva como referencia cultural; las castas representadas corresponden funcionalmente a colonias de *Atta*.
+> **Nota de alcance:** la biología de referencia son las hormigas cortadoras de hojas (*Atta* spp.), con elementos culturales de la hormiga culona santandereana. Las castas (obreras y soldadas) corresponden funcionalmente a *Atta*; la **marabunta** es un enemigo inspirado en *Nomamyrmex esenbeckii*.
 
----
-
-## Tabla de contenido
-
-- [Características](#características)
-- [Concepto del modelo](#concepto-del-modelo)
-- [El mundo](#el-mundo)
-- [Autómata celular](#autómata-celular)
-- [Agentes](#agentes)
-- [Defensa y marabunta](#defensa-y-marabunta)
-- [Fuego](#fuego)
-- [Nido y jardín fúngico](#nido-y-jardín-fúngico)
-- [Modo Dios](#modo-dios)
-- [Representación gráfica](#representación-gráfica)
-- [Arquitectura](#arquitectura)
-- [Ciclo de simulación](#ciclo-de-simulación)
-- [Fundamento biológico y límites del modelo](#fundamento-biológico-y-límites-del-modelo)
-- [Instalación y uso](#instalación-y-uso)
-- [Documentación](#documentación)
+El diseño completo (fundamento biológico, reglas formales, fórmulas y parámetros) está en el [**Documento técnico**](./FormicBox_Documento_Tecnico.docx).
 
 ---
 
-## Características
+## Contenido
 
-- Autómata celular con vecindad de Moore (8 celdas) para fuego y campos químicos.
-- Cuatro campos de feromonas con difusión, evaporación y transporte por viento.
-- Agentes con estados conductuales, energía individual y **vector de hogar** (integración de trayectoria) para volver al nido.
-- Prevención de colisiones por evasión local: una celda nunca tiene dos hormigas.
-- Tres tipos de agentes: **obreras**, **soldadas** y **marabunta** (enemigo externo).
-- Memoria colectiva en el nido: el estado del jardín fúngico modifica las decisiones de forrajeo.
-- Propagación de fuego direccional influida por el viento.
-- **Modo Dios**: el jugador modifica el ambiente sin controlar directamente ninguna hormiga.
-- Pixel-art en vista oblicua ("plano picado") con sprites interpolados entre celdas.
+- [Instalación y ejecución](#instalación-y-ejecución)
+- [Modos de juego](#modos-de-juego)
+- [Controles](#controles)
+- [El modelo en resumen](#el-modelo-en-resumen)
+- [Herramientas de análisis](#herramientas-de-análisis)
+- [Estructura del repositorio](#estructura-del-repositorio)
+- [Arte y sonido](#arte-y-sonido)
+- [Autores](#autores)
 
-## Concepto del modelo
+---
 
-El autómata **no** representa cada hormiga como una celda. El ambiente es el componente celular; las hormigas son agentes con posición, dirección, energía, carga, estado y vector de hogar. Por eso la arquitectura es un **modelo híbrido autómata celular + agentes**.
+## Instalación y ejecución
 
-Cada hormiga consulta información espacial cercana (feromonas, recursos, peligro, dirección del nido). La repetición de estas reglas locales produce patrones colectivos sin control central.
+**Requisitos:** Python 3.10 o superior.
 
-## El mundo
+```bash
+git clone https://github.com/samueldbt/FormicBox.git
+cd FormicBox
+pip install -r requirements.txt   # numpy, scipy, pygame
+python main.py
+```
 
-El mapa es una matriz 2D de celdas con cuatro tipos de terreno:
+Ejecuta siempre desde la raíz del repositorio (los módulos se importan por nombre: `config`, `reglas`, `Automata`, …). SciPy acelera la difusión con convoluciones; si no está instalado se usa un cálculo equivalente con NumPy.
 
-| Terreno | Función | Comportamiento |
+## Modos de juego
+
+| Modo | Descripción |
+| --- | --- |
+| **Modo Dios** | Mapa aleatorio. El jugador no controla hormigas: modifica el ambiente (recursos, fuego, clima, viento, enemigos) y observa cómo responde la colonia. |
+| **Lucha** | Igual que el Modo Dios, pero cada 300 ticks entra un enjambre de marabuntas por el borde del mapa. |
+| **Ajustes** | Volumen general, de música y de efectos. |
+
+La partida termina ("FIN DE LA COLONIA") cuando no quedan obreras y la colonia no tiene reservas para criar otra.
+
+## Controles
+
+| Tecla | Acción |
+| --- | --- |
+| `Espacio` | Pausa / continuar |
+| `.` | Avanzar un tick (paso a paso) |
+| `R` | Reiniciar con la misma semilla |
+| `W` `A` `S` `D` | Cambiar la dirección del viento · `X` lo detiene |
+| `V` `B` `N` `M` | Ver feromona vegetal / azúcar / alarma / caza · `Z` todas |
+| `G` · `T` · `H` | Ver gradiente al nido · tráfico · humedad |
+| Flechas | Mover la cámara |
+| `Esc` | Volver al menú |
+
+Con el **ratón** se usa el panel lateral: velocidad (×1, ×2, ×4), semilla siguiente y herramientas que se aplican haciendo clic en el mapa — inspeccionar celda, crear obrera/soldada/marabunta, colocar pasto, mango y bocadillo, encender fuego, lluvia, sequía, rayo, matar o quemar una hormiga — además de acciones globales: enjambre, fuego/lluvia/sequía al azar y clima automático.
+
+## El modelo en resumen
+
+### Ambiente (autómata celular)
+
+Matrices de 110 × 20 celdas. Terreno: **tierra**, **piedra**, **agua** y **nido**, generado con un autómata de manchas (regla de mayoría en vecindad de Moore) a partir de una semilla. Sobre la tierra hay **pasto** (tupido/ralo, rebrota según la humedad), **mango** y **bocadillo** (objetos 2×2 con muchas "mordidas").
+
+Cada tick, sobre el estado anterior:
+
+1. **Feromonas** (`vegetal`, `azucar`, `alarma`, `caza`): evaporación, difusión en vecindad de Moore (convolución SciPy) y arrastre por viento:
+
+   $$\tau' = (1-\rho)\,\tau + D\,(\bar\tau_{Moore} - \tau) + W\,(\tau_{\leftarrow viento} - \tau) + A$$
+
+2. **Clima:** zonas de lluvia (suben la humedad y apagan fuego), sequía (la bajan) y rayos.
+3. **Fuego:** cada vecino ardiendo contagia con $p = P_{base}\,e^{c\,\cos\theta}$ según el viento, puede saltar 2 celdas a favor del viento y la humedad reduce la ignición ($\times e^{-3h}$). Fuego → ceniza → tierra.
+4. **Recursos:** el fuego destruye lo que toca; pasto y mango rebrotan.
+
+### Colonia
+
+El nido tiene una **bolsa de alimento** (1 bocadillo = 2 mango = 3 pasto = 1 unidad) de la que comen las hormigas y el **jardín fúngico**. El excedente se convierte en **crías** que tardan en desarrollarse; sin comida, las hormigas mueren de hambre. Si se acumula demasiado bocadillo, el hongo se **estresa** y las obreras dejan de buscar azúcar (salvo para comer). La **primera obrera sale sola** a explorar; el resto espera a que traiga comida, lo que favorece que se forme un único rastro claro y luego líneas de tráfico.
+
+### Agentes (máquina de Mealy)
+
+Cada hormiga percibe su entorno (radio 3), cambia de estado según una tabla de reglas con prioridad y produce una salida (moverse, depositar feromona, recoger, entregar, comer, morder). Se mueven en 4 direcciones eligiendo por sorteo ponderado.
+
+| Agente | Estados | Rol |
 | --- | --- | --- |
-| **Tierra** | Superficie transitable y combustible | Puede contener recursos, fuego, ceniza y feromonas |
-| **Piedra** | Obstáculo permanente | No transitable ni combustible; bloquea el fuego |
-| **Agua** | Obstáculo ambiental | No transitable ni combustible; bloquea el fuego |
-| **Nido** | Centro de la colonia | Agrega población, recursos y estado del jardín |
+| **Obrera** | `EXPLORE` `RETURN` `FEED` `FLEE` `SEARCH` `CLEAN` | Forrajea siguiendo la pendiente del rastro, recuerda rutas, vuelve al nido, limpia rastros de fuentes agotadas, rescata botín. |
+| **Soldada** | `PATROL` `ATTACK` `RESCUE` `RETURN` `FEED` `FLEE` | Patrulla cerca del nido, sigue la alarma, muerde enemigos, recupera crías robadas. |
+| **Marabunta** | `RAID` `ATTACK` `RETREAT` `FLEE` | Enemigo sin nido: entra en enjambre, sigue el olor del nido y su feromona de caza, saquea comida y crías y se retira. |
 
-Sobre la Tierra pueden existir: **fuego**, **ceniza**, **pasto**, **mango** (recurso de alta prioridad) y **bocadillo** (recurso energético artificial).
+La tabla de prioridades de la obrera está en [`reglas.py`](./reglas.py): `FLEE → REFUEL_NEST → EAT_MAP → LOOT → PICKUP → GO_FEED → SEARCH → CLEAN → EXPLORE`.
 
-**Estructura conceptual de una celda:**
+Todos los parámetros están en [`config.py`](./config.py).
 
-- `tipo_terreno`: `TIERRA`, `PIEDRA`, `AGUA` o `NIDO`
-- `estado_fuego`: `NINGUNO`, `FUEGO` o `CENIZA`
-- `pasto`, `mango`, `bocadillo`: cantidades
-- `τ_vegetal`, `τ_azucar`, `τ_alarma`, `τ_caza`: campos químicos
-- `poblacion` y reservas del nido (principalmente en `NIDO`)
-- `estado_hongo`: estado actual del jardín
+## Herramientas de análisis
 
-Todas las celdas exponen los mismos campos; los que no aplican al terreno quedan en cero o `None`.
-
-## Autómata celular
-
-El estado de una celda depende de su estado actual, su vecindad y los parámetros del sistema:
-
-$$S_{ij}(t+1) = F\big(S_{ij}(t),\ N_{ij}(t),\ P\big)$$
-
-Las matrices nuevas se calculan a partir del estado anterior y se sustituyen al final del ciclo, para que el orden de recorrido no altere el resultado.
-
-### Difusión y evaporación de feromonas
-
-$$\tau_i^{t+1}(x,y) = (1-\rho_i)\Big[(1-D_i)\,\tau_i^{t}(x,y) + D_i\,\bar{\tau}_i^{t}(x,y)\Big] + A(x,y)$$
-
-- `ρ`: fracción evaporada por ciclo
-- `D`: factor de difusión
-- `τ̄`: promedio de concentración en la vecindad de Moore
-- `A`: depósito realizado por los agentes
-
-### Transporte por viento
-
-$$\tau' = \tau + D(\bar{\tau} - \tau) - \rho\tau + A + W(\tau)$$
-
-`W(τ)` puede implementarse desplazando la matriz o ponderando más el vecino situado contra la dirección del viento.
-
-### Campos químicos
-
-| Campo | Función | Agentes |
-| --- | --- | --- |
-| `τ_vegetal` | Material vegetal | Obreras |
-| `τ_azucar` | Bocadillo | Obreras (según estado y energía) |
-| `τ_alarma` | Peligro | Obreras y soldadas |
-| `τ_caza` | Cohesión de la marabunta | Enemigos |
-
-> Anular una feromona significa retirar su peso de la función de decisión, no borrar su concentración; el rastro restante sigue decayendo por evaporación.
-
-## Agentes
-
-### Obreras
-
-Población principal. Exploran, seleccionan recursos, depositan feromonas, transportan material vegetal y bocadillo, y regresan al nido con el vector de hogar.
-
-**Estados:** `EXPLORAR` · `CARGAR` · `REGRESAR` · `ALIMENTARSE` · `HUIR`
-
-### Selección de movimiento
-
-$$P = w_v\,\tau_{vegetal} + w_a\,\tau_{azucar} + w_h\,H - w_d\,\tau_{alarma} - w_f\,R_{fuego} + w_r\,R$$
-
-Los pesos cambian según el estado del agente. `H` mide la compatibilidad con el vector de hogar, `R_fuego` el riesgo de fuego y `R` aporta variación aleatoria para evitar decisiones idénticas.
-
-### Vector de hogar
-
-En lugar de una feromona de retorno, la hormiga conserva las coordenadas relativas del nido `H = (Hx, Hy)` y, al entrar en `REGRESAR`, calcula su dirección preferente:
-
-$$\theta_H = \operatorname{atan2}(H_y, H_x)$$
-
-### Energía y velocidad
-
-La energía decrece por el coste de movimiento: `E(t+1) = E(t) − C`. Si `E < E_bajo`, la hormiga prioriza consumir bocadillo y recupera `min(E_max, E + G)`. Como adaptación lúdica, una hormiga con energía máxima obtiene un multiplicador temporal de velocidad (p. ej. 1.5×).
-
-### Tráfico y colisiones
-
-Una celda lógica no puede estar ocupada por dos hormigas a la vez:
-
-1. **Detección:** se verifica si la celda destino elegida está ocupada.
-2. **Evasión:** si lo está, se trata a la otra hormiga como obstáculo temporal y se recalcula hacia otro vecino disponible.
-3. **Resultado:** de la evasión local emergen "autopistas" y flujos paralelos de ida y vuelta, sin carriles artificiales.
-
-### Movimiento visual continuo
-
-La posición lógica cambia de forma discreta, pero el sprite se interpola para evitar teletransportación:
-
-$$x_{render} = x_0 + s(t)\,(x_1 - x_0), \qquad y_{render} = y_0 + s(t)\,(y_1 - y_0), \qquad 0 \le s(t) \le 1$$
-
-La matriz se actualiza antes de completar la traslación (para que nadie más ocupe la celda), pero la hormiga espera a terminar la animación antes de decidir su siguiente movimiento.
-
-## Defensa y marabunta
-
-Marabuntas y soldadas no forrajean; sus algoritmos están diseñados para interceptación y combate.
-
-**Marabunta (enemigo):** sigue rastros de las obreras y mantiene cohesión con `τ_caza`.
-
-$$P_{marabunta} = w_c\,\tau_{caza} + w_p\,(\tau_{vegetal} + \tau_{azucar}) + w_r\,R$$
-
-**Soldada (defensa):** escala el gradiente de alarma hacia el epicentro del ataque, pero huye si la alarma es por fuego.
-
-$$P_{soldada} = w_{al}\,\tau_{alarma} - w_f\,R_{fuego} + w_r\,R$$
-
-**Combate asimétrico** (sin dados, por superposición en celda):
-
-- **Depredación:** una marabunta (1 HP) que entra en la celda de una obrera la elimina e inyecta valor máximo en `τ_alarma` en esa coordenada.
-- **Defensa:** una soldada (5 HP) que intercepta a una marabunta la elimina y pierde 1 HP. Con 0 HP, es eliminada. Esto obliga a la marabunta a usar su densidad (`τ_caza`) para abrumar a las defensoras.
-
-**Spawn:** la marabunta no tiene nido; aparece en los bordes del mapa en ráfagas (p. ej. 30–50 unidades), de forma procedural o activada por el jugador.
-
-## Fuego
-
-Secuencia: `TIERRA + combustible → FUEGO → CENIZA`. Piedra y agua bloquean la propagación.
-
-$$P_{ignición} = \operatorname{clamp}\big[P_{base}\,(1 + c\,V\cos\theta),\ 0,\ 1\big]$$
-
-`V` es la intensidad del viento, `θ` el ángulo entre el viento y el vecino, y `c` la influencia del viento. La probabilidad sube a favor del viento y baja en contra. *(Propuesta de diseño inspirada en modelos de fuego con autómatas celulares, no una ecuación universal.)*
-
-**Alarma:** cuando un incendio mata a una hormiga se segrega `τ_alarma`. Las obreras priorizan salir del riesgo; las soldadas se acercan por efecto de la dispersión, pero huyen cuando la alarma supera el umbral. Un incendio grave puede activar la evacuación del nido.
-
-## Nido y jardín fúngico
-
-El nido agrega recursos y mantiene el estado colectivo del jardín, que actúa como **memoria de colonia**: no se guarda una lista de eventos, el estado actual modifica directamente las reglas de decisión.
-
-```
-Mango_nido(t+1)     = Mango_nido(t)     + carga_mango
-Pasto_nido(t+1)     = Pasto_nido(t)     + carga_pasto
-Bocadillo_nido(t+1) = Bocadillo_nido(t) + carga_bocadillo
-
-si Bocadillo_nido ≥ U_azucar  →  estado_hongo = ESTRESADO
+```bash
+python analisis.py                 # equilibrio teórico: energía, demanda, población sostenible
+python barrido.py                  # barrido de parámetros sin interfaz
+python barrido.py --ticks 3000 --semillas 5 --max 60 --escenario corridor --ataque 800 --clima
 ```
 
-Con el jardín `ESTRESADO`, `τ_azucar` deja de pesar en el forrajeo colectivo (las obreras priorizan material vegetal), aunque una obrera con energía baja aún puede buscar bocadillo para consumo individual. Al recuperarse, las reglas vuelven progresivamente a la normalidad.
+`barrido.py` prueba combinaciones de constantes en varias semillas y las puntúa (0–100) por crecimiento de la población, formación de autopistas y rastros, y hormigas que mueren sin llegar a la comida; penaliza la extinción. Guarda `reportes/barrido_<fecha>.csv` y `.md` con las mejores y peores combinaciones. Escenarios disponibles con `--escenario`: `corridor`, `u_obstacle`, `grass_field`.
 
-**Crecimiento poblacional** (proxy, no reproducción literal):
+## Estructura del repositorio
 
 ```
-si recurso_acumulado ≥ U_crecimiento y tiempo ≥ T_crecimiento → población += 1
+main.py             punto de entrada
+config.py           constantes y parámetros
+reglas.py           tabla de reglas (máquina de Mealy) de la obrera
+analisis.py         análisis de equilibrio
+barrido.py          barrido de parámetros
+Automata/           autómata celular: terreno, objetos, feromonas, fuego, clima, colonia, botín, escenarios
+Hormigas/           agentes: base, percepción (mealy.py), obrera, soldada, marabunta
+Simulación/         bucle de simulación (une autómata y agentes)
+Interfaz/           pygame: escenas, render, cámara, audio, herramientas del Modo Dios
+reportes/           salidas de barrido.py
 ```
 
-| Recurso | Tipo | Destino | Regla |
-| --- | --- | --- | --- |
-| Pasto | Material vegetal | Nido/jardín | Forrajeo normal |
-| Mango | Material vegetal | Nido/jardín | Prioridad alta (mayor segregación de feromona) |
-| Bocadillo | Energético artificial | Consumo o nido | Depende del estado del nido y la energía |
+## Arte y sonido
 
-## Modo Dios
+El juego busca su arte y audio en `Assets/` (sprites de 32 × 32 px dibujados mirando hacia arriba). Si falta un archivo, usa un sustituto de color o silencio y lo avisa en consola. Rutas esperadas (ver [`Interfaz/manifest.py`](./Interfaz/manifest.py) e [`Interfaz/audio.py`](./Interfaz/audio.py)):
 
-El jugador interviene el ambiente, no las hormigas:
-
-- Colocar pasto, mango y bocadillo.
-- Crear obstáculos de piedra y agua.
-- Iniciar fuego.
-- Modificar dirección o intensidad del viento.
-- Provocar perturbaciones (p. ej. invocar marabuntas).
-- Consultar estadísticas de población, recursos, feromonas y fuego.
-
-## Representación gráfica
-
-- Sprites y tiles en marco de **32 × 32 px**; las castas pequeñas dejan más píxeles libres dentro del marco.
-- Obreras pequeñas, soldadas mayores, marabunta de tamaño similar a una obrera con mandíbulas grandes.
-- Vista pixel-art oblicua / cámara alta ("plano picado").
-- Las feromonas se dibujan como colores semitransparentes (un color por feromona; la opacidad indica concentración), por debajo de hormigas y objetos pero por encima de la tierra.
-
-## Arquitectura
-
-| Módulo | Responsabilidad | Datos |
-| --- | --- | --- |
-| Mapa / CA | Terreno y estados | Matriz de celdas |
-| Feromonas | Difusión, evaporación y viento | Matrices τ |
-| Fuego | Ignición y propagación | `estado_fuego` |
-| Hormigas | Estados y movimiento | Agentes |
-| Nido | Recursos, población y jardín | Estado agregado |
-| Render | Sprites, interpolación y UI | Coordenadas |
-| Jugador | Interacciones | Eventos |
-
-## Ciclo de simulación
-
-1. Leer acciones del jugador.
-2. Actualizar viento.
-3. Actualizar feromonas.
-4. Evaluar fuego.
-5. Actualizar recursos y terreno.
-6. Actualizar nido.
-7. Evaluar decisiones de los agentes.
-8. Resolver ocupación de celdas.
-9. Mover agentes (lógicamente).
-10. Aplicar recolección, entrega, consumo y combate.
-11. Interpolar sprites y renderizar.
-
-## Fundamento biológico y límites del modelo
-
-- Las *Atta* tienen división del trabajo y dependen de un hongo simbionte cultivado con material vegetal.
-- La **marabunta** no es una casta de *Atta*: es un enemigo inspirado en *Nomamyrmex esenbeckii*, depredadora documentada de colonias de *Atta*.
-- El **mango** tiene mayor peso de forrajeo por estudios experimentales que muestran preferencia de *Atta cephalotes* por su follaje bajo ciertas condiciones.
-- El **bocadillo** es un recurso artificial del proyecto. El estrés del jardín por exceso de azúcar se inspira en el fenómeno de *delayed rejection*, pero **es una mecánica experimental del juego, no un mecanismo demostrado para *Atta***.
-- La conducta de las soldadas ante el fuego, la evacuación del nido y la ecuación de ignición direccional son **reglas de simulación**, no afirmaciones sobre comportamiento real.
-
-## Instalación y uso
-
-
-**Requisitos:** ``
-
-## Documentación
-
-El diseño científico y técnico completo está en [`FormicBox_Documento_Tecnico.docx`](./FormicBox_Documento_Tecnico.docx).
+- `ui/title.png` — fondo del menú
+- `terrain/`, `objects/`, `fire/` — tiles (con variantes de autotile para agua, roca y pasto)
+- `worker/`, `soldier/`, `marabunta/` — animaciones de caminar, cargar, atacar y morir
+- `audio/music/calm.ogg`, `audio/music/fight.ogg`
+- `audio/sfx/fire.ogg`, `thunder.ogg`, `bite.ogg`, `deliver.ogg`, `death.ogg`, `menu.ogg`
 
 ## Autores
 
-`<nombres del equipo>` — *Autómatas y Lenguajes Formales*, `Uis`
-
-## Licencia
-
-``
+German, Consuegra, Ever, Iván, Harold, Nicolás, Angel, David, Nikollas y Samuel — *Autómatas y Lenguajes Formales*, Universidad Industrial de Santander (UIS).
