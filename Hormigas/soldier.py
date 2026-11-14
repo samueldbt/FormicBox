@@ -8,6 +8,7 @@ from .marabunta import damage
 
 STATE_PATROL = "PATROL"
 STATE_ATTACK = "ATTACK"
+STATE_RESCUE = "RESCUE"
 
 ATTACK_ENTER_ALARM = 0.5
 ATTACK_EXIT_ALARM = 0.1
@@ -28,6 +29,8 @@ class Soldier(Ant):
         self.enemy = None
         self.state = STATE_PATROL
         self.carried_resource = NONE
+        self.carried_loot = None
+        self.loot_target = None
 
     def update_logic(self, automaton, occupied_mask):
         if not self.alive:
@@ -46,17 +49,32 @@ class Soldier(Ant):
         if self.state == STATE_ATTACK:
             self._attack()
 
+    def _find_brood_loot(self, automaton):
+        """Botín visible que contiene crías (las soldadas solo rescatan eso): (y, x, distancia) o None."""
+        best = None
+        R = config.VISION_RADIUS
+        for (ly, lx), lt in automaton.loot.items.items():
+            if lt.brood and max(abs(ly - self.y), abs(lx - self.x)) <= R:
+                d = abs(ly - self.y) + abs(lx - self.x)
+                if best is None or d < best[2]:
+                    best = (ly, lx, d)
+        return best
+
     def _evaluate_state(self, automaton, p):
-        """Prioridad: huir del fuego > comer en el nido > atacar > energía justa para volver > patrullar."""
+        """Prioridad: huir del fuego > comer/entregar en el nido > atacar > rescatar crías > energía justa > patrullar."""
         if p.fire_dist is not None and p.fire_dist <= config.FIRE_ALERT_RADIUS:
             self.state = config.STATE_FLEE
             return
         if self.state == config.STATE_FLEE:
-            self.state = STATE_PATROL
+            self.state = config.STATE_RETURN if self.carried_loot is not None else STATE_PATROL
 
         if p.at_nest:
             self.refuel_at_nest(automaton)
-            if self.state == config.STATE_FEED:
+            if self.carried_loot is not None:
+                automaton.colony.return_loot(self.carried_loot)
+                self.carried_loot = None
+                automaton.emit("deliver", self.y, self.x)
+            if self.state in (config.STATE_FEED, config.STATE_RETURN):
                 self.state = STATE_PATROL
 
         alarm = p.alarm_here
@@ -67,6 +85,25 @@ class Soldier(Ant):
                 self.state = STATE_PATROL
         elif alarm > ATTACK_ENTER_ALARM:
             self.state = STATE_ATTACK
+
+        # Rescate de crías: sin enemigos a la vista
+        if self.carried_loot is not None and self.enemy is None:
+            self.state = config.STATE_RETURN
+            return
+        if self.carried_loot is None and self.enemy is None and self.state in (STATE_PATROL, STATE_RESCUE):
+            tgt = self._find_brood_loot(automaton)
+            if tgt is None:
+                if self.state == STATE_RESCUE:
+                    self.state = STATE_PATROL
+            elif (tgt[0], tgt[1]) == (self.y, self.x):
+                self.carried_loot = automaton.loot.take(self.y, self.x)
+                self.loot_target = None
+                self.state = config.STATE_RETURN
+                return
+            else:
+                self.loot_target = (tgt[0], tgt[1])
+                self.state = STATE_RESCUE
+                return
 
         has_food = automaton.colony.has_food()
         if self.state == config.STATE_FEED and not has_food:
@@ -103,8 +140,13 @@ class Soldier(Ant):
             elif self.state == config.STATE_FLEE:
                 heat = self.fire_heat(automaton, ny, nx)
                 score = config.WEIGHT_FLEE * (1.0 - heat) + 0.5 * inertia
-            elif self.state == config.STATE_FEED:
+            elif self.state in (config.STATE_FEED, config.STATE_RETURN):
                 score = config.WEIGHT_HOME * (align + 1.0) / 2.0
+            elif self.state == STATE_RESCUE and self.loot_target is not None:
+                ty, tx = self.loot_target
+                d_now = abs(self.y - ty) + abs(self.x - tx)
+                d_new = abs(ny - ty) + abs(nx - tx)
+                score = config.WEIGHT_RESCUE * (d_now - d_new + 1.0) / 2.0 + 0.5 * inertia
             else:  # PATROL: paseo con inercia que no se aleja más de SOLDIER_PATROL_RADIUS
                 over = max(0.0, d_nest / config.SOLDIER_PATROL_RADIUS - 1.0)
                 score = WEIGHT_PATROL_HOME * over * align + inertia

@@ -18,6 +18,8 @@ class ViewState:
         self.layers = {n: True for n in LAYER_NAMES}
         self.gradient = False
         self.traffic = False
+        self.moisture = False      # tecla H: película azul (húmedo) / amarillenta (seco)
+        self.weather = True        # lluvia y rayos animados
 
 
 class MapRenderer:
@@ -26,6 +28,7 @@ class MapRenderer:
         self.sim = sim
         self.view = view
         self._dense_cache = (-1, None)
+        self._vrng = np.random.default_rng(7)   # solo para el dibujo de la lluvia
         self.rebuild()
 
     def rebuild(self):
@@ -101,7 +104,15 @@ class MapRenderer:
             spr = self.A.block_surface(k, o.object_bites.get(oid, 1), total_bites(k))
             blits.append((spr, (x * T + ox, y * T + oy)))
         surf.blits(blits)
-
+        
+        # 3c. Botín de marabuntas caídas (placeholder 16x16 si falta el arte)
+        if a.loot.items:
+            blits = []
+            for (ly, lx), lt in a.loot.items.items():
+                if x0 <= lx < x1 and y0 <= ly < y1:
+                    blits.append((self.A.loot_surface(bool(lt.brood)), (lx * T + ox, ly * T + oy)))
+            surf.blits(blits)
+            
         # 4. Fuego y ceniza
         frame = min(config.ANIM_FRAMES - 1, int(s * config.ANIM_FRAMES))
         fire, phase = a.fire.matrix[sl].tolist(), self.phase[sl].tolist()
@@ -115,6 +126,57 @@ class MapRenderer:
                 spr = self.A.fire[(frame + phase[j][i]) % config.ANIM_FRAMES] if f == BURNING else self.A.ash
                 blits.append((sp[spr], ((x0 + i) * T + ox, py)))
         surf.blits(blits)
+
+        # 5. Humedad (H), lluvia y rayos (encima de todo el mapa, debajo de las hormigas)
+        self._draw_moisture(surf, cam, sl, x0, y0)
+        if self.view.weather:
+            self._draw_rain(surf, cam, x0, y0, x1, y1)
+            self._draw_bolts(surf, cam, s)
+
+    # ------------------------------------------------------------ clima
+    def _draw_moisture(self, surf, cam, sl, x0, y0):
+        """Película translúcida: azul donde hay humedad, amarillenta donde está seco. No tapa el mapa."""
+        if not self.view.moisture:
+            return
+        m = self.sim.automaton.terrain.moisture[sl]
+        self._overlay(surf, cam, 150.0 * np.power(m, 1.5), config.MOISTURE_VIEW_BLUE, x0, y0)
+        dry = np.clip((config.MOISTURE_DRY_BELOW - m) / max(1e-6, config.MOISTURE_DRY_BELOW), 0.0, 1.0)
+        self._overlay(surf, cam, 110.0 * dry, config.MOISTURE_VIEW_DRY, x0, y0)
+
+    def _draw_rain(self, surf, cam, x0, y0, x1, y1):
+        """Rayitas azules dentro de cada zona de lluvia (cantidad según su intensidad)."""
+        T = config.TILE
+        for z in self.sim.automaton.weather.zones_of("rain"):
+            n = int(40 * z.intensity())
+            if n <= 0:
+                continue
+            ang = self._vrng.uniform(0, 6.2832, n)
+            rad = np.sqrt(self._vrng.uniform(0, 1, n)) * z.r
+            cy = (z.y + 0.5 + rad * np.sin(ang)) * T - cam.y
+            cx = (z.x + 0.5 + rad * np.cos(ang)) * T - cam.x
+            for yy, xx in zip(cy.tolist(), cx.tolist()):
+                pygame.draw.line(surf, (170, 205, 255), (xx, yy), (xx - 3, yy + 9), 1)
+
+    def _draw_bolts(self, surf, cam, s):
+        """Rayo: píxeles blancos revelados de arriba hacia abajo (orden de caída) que se apagan con la edad."""
+        T, P = config.TILE, max(1, int(config.LIGHTNING_PIXEL))
+        vw, vh = surf.get_size()
+        for b in self.sim.automaton.weather.bolts:
+            t = b.age + s
+            reveal = min(1.0, t / 0.5)                         # cae en medio tick
+            fade = 1.0 - max(0.0, t - 0.5) / max(0.25, b.life - 0.5)
+            if fade <= 0:
+                continue
+            pts = b.pix[b.order <= reveal]
+            col = (255, 255, 255) if fade > 0.4 else (190, 210, 255)
+            for py, px in pts.tolist():
+                sx, sy = px - cam.x, py - cam.y
+                if 0 <= sx < vw and 0 <= sy < vh:
+                    surf.fill(col, (sx, sy, P, P))
+            if reveal >= 1.0:                                  # destello en el impacto
+                glow = pygame.Surface((2 * T, 2 * T), pygame.SRCALPHA)
+                pygame.draw.circle(glow, (255, 255, 255, int(150 * fade)), (T, T), T)
+                surf.blit(glow, (b.x * T + T // 2 - T - cam.x, b.y * T + T // 2 - T - cam.y))
 
     # ------------------------------------------------------------ overlays
     def _draw_overlays(self, surf, cam, sl, x0, y0):

@@ -7,6 +7,9 @@ from .objects import EnvironmentObjects, NONE, GRASS, MANGO, BOCADILLO
 from .pheromone import PheromoneLayer
 from .fire import FireLayer, NO_FIRE, BURNING, ASH
 from .colony import Colony
+from collections import deque
+from .loot import LootLayer
+from .weather import Weather
 
 
 class CellularAutomaton:
@@ -50,6 +53,8 @@ class CellularAutomaton:
 
         self.fire = FireLayer(width, height, seed)
         self.colony = Colony()
+        self.loot = LootLayer()
+        self.events = []              # eventos para el audio: (tipo, y, x)
 
         self.pheromones = {
             name: PheromoneLayer(width, height, *params, mode=config.PHEROMONE_MODE[name])
@@ -60,30 +65,25 @@ class CellularAutomaton:
         }
 
         self.tick_counter = 0
+        self.base_moisture = self.terrain.moisture.copy()   # humedad "de equilibrio": la lluvia y la sequía la desvían
+        self.weather = Weather(self, seed)
 
     # ------------------------------------------------------------ utilidades
     def _disk(self, y, x, radius):
         yy, xx = np.ogrid[:self.height, :self.width]
         return (yy - y) ** 2 + (xx - x) ** 2 <= radius ** 2
 
-    def rain(self, y, x, radius, amount=0.4):
-        """Sube la humedad en la zona (tope 1.0) y apaga el fuego que esté ardiendo."""
-        mask = self._disk(y, x, radius)
-        self.terrain.moisture[mask] = np.clip(self.terrain.moisture[mask] + amount, 0.0, 1.0)
-        self.fire.matrix[mask & (self.fire.matrix == BURNING)] = NO_FIRE
+    def rain(self, y, x, radius=None, ticks=None):
+        """Zona de lluvia: sube la humedad poco a poco y apaga el fuego (ver weather.py)."""
+        return self.weather.rain(y, x, radius, ticks)
 
-    def drought(self, y, x, radius, amount=0.4):
-        mask = self._disk(y, x, radius)
-        self.terrain.moisture[mask] = np.clip(self.terrain.moisture[mask] - amount, 0.0, 1.0)
+    def drought(self, y, x, radius=None, ticks=None):
+        """Zona de sequía: evapora la humedad progresivamente."""
+        return self.weather.drought(y, x, radius, ticks)
 
-    def lightning(self, y, x):
-        """Ignición en una celda. Solo prende si es tierra y no está ya en llamas."""
-        if not (0 <= y < self.height and 0 <= x < self.width):
-            return False
-        if self.terrain.matrix[y, x] != DIRT or self.fire.matrix[y, x] != NO_FIRE:
-            return False
-        self.fire.matrix[y, x] = BURNING
-        return True
+    def lightning(self, y, x, sure=True):
+        """Rayo en (y, x). Devuelve True si prendió fuego (pasto/mango sin fuego)."""
+        return self.weather.strike(y, x, sure)
 
     def recompute_fields(self):
         """Rehace home_dist, home_field y outbound_field a partir de terrain.matrix actual.
@@ -94,14 +94,39 @@ class CellularAutomaton:
         self.outbound_field = np.where(
             np.isfinite(self.home_dist), 1.0 - self.home_field, 0.0
         ).astype(np.float32)
+        self.exit_dist = self._exit_field()
         if hasattr(self, "objects"):
             self.objects.set_zone(self.home_dist)
+
+    def emit(self, kind, y, x):
+        self.events.append((kind, int(y), int(x)))
+
+    def _exit_field(self):
+        """Distancia por camino a la celda transitable más cercana del borde del mapa (retirada de las marabuntas)."""
+        h, w = self.height, self.width
+        walk = (self.terrain.matrix == DIRT) | (self.terrain.matrix == NEST)
+        dist = np.full((h, w), np.inf)
+        q = deque()
+        for y in range(h):
+            for x in range(w):
+                if walk[y, x] and (y in (0, h - 1) or x in (0, w - 1)):
+                    dist[y, x] = 0
+                    q.append((y, x))
+        while q:
+            y, x = q.popleft()
+            for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < h and 0 <= nx < w and walk[ny, nx] and dist[ny, nx] == np.inf:
+                    dist[ny, nx] = dist[y, x] + 1
+                    q.append((ny, nx))
+        return dist
 
     rebuilt_gradient = recompute_fields   # nombre antiguo, por compatibilidad
 
     def _clear_cells(self, mask):
         """Borra objetos, fuego y feromona bajo la máscara."""
         self.objects.clear_mask(mask)
+        self.loot.clear_where(mask)
         self.fire.matrix[mask] = NO_FIRE
         self.fire.age[mask] = 0
         for layer in self.pheromones.values():
@@ -134,11 +159,15 @@ class CellularAutomaton:
         if sealed.any():
             self._clear_cells(sealed)
 
-        # La humedad depende del agua: se recalcula desde cero
+        # La humedad base depende del agua: se recalcula, conservando lo que lluvia/sequía hayan desviado
+        delta = self.terrain.moisture - self.base_moisture
         self.terrain.moisture.fill(0.0)
         self.terrain._calculate_static_moisture()
         if self.scenario is not None:
             self.terrain.moisture = np.maximum(self.terrain.moisture, self._scenario_moisture)
+        self.base_moisture = self.terrain.moisture.copy()
+        self.terrain.moisture = np.clip(self.base_moisture + delta, 0.0, 1.0).astype(np.float32)
+        self.terrain.moisture[self.terrain.matrix == WATER] = 1.0
         self.recompute_fields()
         return True
 
@@ -171,11 +200,15 @@ class CellularAutomaton:
             layer.update(moore_avg, wind_effect)
             layer.matrix *= is_dirt
 
+        # 1b. Clima: lluvia, sequía y rayos (cambian la humedad que lee el fuego)
+        self.weather.update()
+
         # 2. Propagación del fuego (la ceniza expira dentro de FireLayer)
         self.fire.update_fire(self.terrain.matrix, self.objects.matrix, self.terrain.moisture)
 
         # 3. El fuego (y la ceniza) destruyen los objetos de su celda
         self.objects.clear_mask(self.fire.matrix != NO_FIRE)
+        self.loot.clear_where(self.fire.matrix != NO_FIRE)
 
         # 4. Brotes y maduración lenta
         self.objects.update(self.terrain.matrix, self.terrain.moisture,

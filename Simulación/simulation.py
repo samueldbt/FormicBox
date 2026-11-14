@@ -38,11 +38,14 @@ class Simulation:
         self.terrain_version = 0
         self.last_error = ""
         self.game_over = False
+        self.game_over_reason = ""
+        self._doom = 0                            # ticks seguidos en estado irrecuperable
         self.events = []
         self.deaths = {"WORKER": 0, "SOLDIER": 0, "MARABUNTA": 0}
         self.death_causes = {}                    # causa -> cantidad (obreras y soldadas)
         self.lost_with_food = 0                   # murieron sin energía habiendo comida en el nido
         self.births = 0
+        self.escaped = 0                          # marabuntas que salieron del mapa
         self._starve_timer = 0
         self.traffic = np.zeros((self.automaton.height, self.automaton.width), dtype=np.float32)
         castes = ["WORKER"] * config.INITIAL_WORKERS + ["SOLDIER"] * config.INITIAL_SOLDIERS
@@ -74,10 +77,12 @@ class Simulation:
             ag.prev_y, ag.prev_x = ag.y, ag.x
             if not ag.alive:
                 ag.dead_ticks += 1
-        self.agents[:] = [ag for ag in self.agents if ag.alive or ag.dead_ticks < config.CORPSE_TICKS]
-
+        self.agents[:] = [ag for ag in self.agents
+                          if (ag.alive or ag.dead_ticks < config.CORPSE_TICKS) and not getattr(ag, "escaped", False)]
+       
         # 1. Ambiente (feromonas, fuego, ceniza, recursos)
         a.update_step()
+        self._apply_strikes()                     # los rayos del clima matan a quien estuviera en la celda
 
         # 2. Muerte por fuego
         fire = a.fire.matrix
@@ -121,12 +126,17 @@ class Simulation:
                 if not ag.attacking:
                     ag.facing = (new[0] - old[0], new[1] - old[1])
 
-        # 5. Bajas: se cuentan por causa; en combate o fuego dejan alarma (una vez)
+        # 5. Bajas: se cuentan por causa; en combate o fuego dejan alarma (una vez). Quien muere con botín lo suelta.
         for ag in self.agents:
             if not ag.alive and not ag.death_handled:
                 ag.death_handled = True
-                self.deaths[ag.CASTE] += 1
                 cause = ag.death_cause or "?"
+                if cause == "ESCAPE":
+                    self.escaped += 1
+                    continue
+                self.deaths[ag.CASTE] += 1
+                self._release_loot(ag)
+                self.events.append(("death", ag.y, ag.x))
                 if ag.CASTE != "MARABUNTA":
                     self.death_causes[cause] = self.death_causes.get(cause, 0) + 1
                     if cause == "STARVE" and a.colony.has_food():
@@ -140,12 +150,90 @@ class Simulation:
             if ag.alive and ag.CASTE == "WORKER" and (ag.y, ag.x) != nest:
                 self.traffic[ag.y, ag.x] += 1.0
 
-        # 7. Game over: ninguna obrera viva, en cola ni en desarrollo, y sin bolsa para una nueva
-        c = a.colony
-        workers_alive = any(ag.alive and ag.CASTE == "WORKER" for ag in self.agents)
-        if (not workers_alive and "WORKER" not in self.queue
-                and c.brood_count("WORKER") == 0 and not c.can_afford("WORKER")):
+        # 7. Game over (con periodo de gracia: solo si el estado irrecuperable se mantiene)
+        self._check_game_over()
+
+        # 8. Eventos para el audio (sin dependencias de la interfaz)
+        bites = 0
+        for ag in self.agents:
+            if ag.alive and ag.attacking and bites < 3:
+                self.events.append(("bite", ag.y, ag.x))
+                bites += 1
+        if self.tick % 8 == 0 and (a.fire.matrix > 0).any():
+            ys, xs = np.nonzero(a.fire.matrix > 0)
+            self.events.append(("fire", int(ys[len(ys) // 2]), int(xs[len(xs) // 2])))
+        self.events.extend(a.events)
+        a.events.clear()
+        if len(self.events) > 300:
+            del self.events[:-300]
+    # ------------------------------------------------------------ fin de juego
+    def _check_game_over(self):
+        """La colonia está perdida si no queda ninguna obrera (viva, en cola o en desarrollo) y tampoco puede
+        iniciar una cría de obrera DE VERDAD (con la reserva de ciclos y sin hongo famélico). Antes se comparaba
+        sin la reserva: la colonia quedaba "viva" pero sin poder nacer nada y el juego se congelaba sin terminar.
+        Debe mantenerse GAME_OVER_GRACE ticks seguidos para no disparar por un bache momentáneo."""
+        c = self.automaton.colony
+        workers = sum(1 for ag in self.agents if ag.alive and ag.CASTE == "WORKER")
+        pending = c.brood_count("WORKER") + sum(1 for q in self.queue if q == "WORKER")
+        if workers or pending:
+            self._doom = 0
+            return
+        rebuild = (not c.starving) and c.can_afford("WORKER", True, self._pop_counts())
+        if rebuild:
+            self._doom = 0
+            return
+        self._doom += 1
+        if self._doom >= config.GAME_OVER_GRACE:
             self.game_over = True
+            soldiers = sum(1 for ag in self.agents if ag.alive and ag.CASTE == "SOLDIER")
+            self.game_over_reason = ("Sin obreras y sin reservas para criar otra"
+                                     if c.starving or not rebuild else "Sin obreras")
+            if soldiers == 0:
+                self.game_over_reason = "La colonia desapareció"
+
+    # ------------------------------------------------------------ clima y rayos
+    def _apply_strikes(self):
+        w = self.automaton.weather
+        nest = self.nest
+        for (y, x) in w.strikes:
+            if (y, x) == nest:
+                continue                          # bajo tierra
+            for ag in self.agents:
+                if ag.alive and ag.y == y and ag.x == x:
+                    ag.die("LIGHTNING")
+        w.strikes.clear()
+
+    def _pick_cell(self, y, x):
+        """Si no se da celda, elige una de tierra al azar (botones sin clic: Lluvia, Sequía)."""
+        if y is not None and x is not None:
+            return int(y), int(x)
+        ys, xs = np.nonzero(self.automaton.terrain.matrix == DIRT)
+        if len(ys) == 0:
+            return self.nest
+        i = random.randrange(len(ys))
+        return int(ys[i]), int(xs[i])
+
+    def rain(self, y=None, x=None, radius=None):
+        self.automaton.rain(*self._pick_cell(y, x), radius)
+        self.version += 1
+        return True
+
+    def drought(self, y=None, x=None, radius=None):
+        self.automaton.drought(*self._pick_cell(y, x), radius)
+        self.version += 1
+        return True
+
+    def lightning(self, y, x):
+        """Rayo en una celda exacta: prende pasto/mango y mata al ente vivo que esté ahí."""
+        a = self.automaton
+        if not (0 <= y < a.height and 0 <= x < a.width):
+            return False
+        a.lightning(y, x, sure=True)
+        self._apply_strikes()
+        self.events.extend(a.events)
+        a.events.clear()
+        self.version += 1
+        return True
 
     # ------------------------------------------------------------ salida, crías y hambre
     def _release_queue(self, nest):
@@ -238,8 +326,24 @@ class Simulation:
         masks = {k: v > 0 for k, v in cnt.items()}
         return cnt, masks
 
+    def _release_loot(self, ag):
+        """Quien muere cargando botín lo deja en esa celda exacta, con la misma identidad."""
+        a = self.automaton
+        food, brood = {}, []
+        if ag.CASTE == "MARABUNTA":
+            food, brood = ag.loot_food, ag.loot_brood
+            ag.loot_food, ag.loot_brood = {}, []
+        elif getattr(ag, "carried_loot", None) is not None:
+            food, brood = ag.carried_loot.food, ag.carried_loot.brood
+            ag.carried_loot = None
+        if food or brood:
+            a.loot.drop(ag.y, ag.x, food, brood)
+
     def _make(self, caste, y, x):
-        return CASTES[caste](y, x, self.nest, self.agents)
+        ag = CASTES[caste](y, x, self.nest, self.agents)
+        if caste == "MARABUNTA":
+            ag.advance = Marabunta.advance_for(self.automaton, y, x)
+        return ag
 
     # ------------------------------------------------------------ API de depuración / Modo Dios
     def agent_at(self, y, x):
@@ -267,17 +371,20 @@ class Simulation:
         return True
 
     def spawn_swarm(self, n):
-        """n marabuntas en el borde más cercano al nido, a SWARM_MIN_DIST o más de camino (gratis)."""
+        """n marabuntas en FILA contigua sobre una sola orilla (la más cercana al nido que cumpla SWARM_MIN_DIST),
+        todas con el mismo avance hacia adentro. Gratis."""
         occ = self._occupied_mask()
-        cells = Marabunta.spawn_cells(self.automaton, n)
-        random.shuffle(cells)
+        cells, adv = Marabunta.swarm_plan(self.automaton, n)
         made = 0
         for y, x in cells:
             if made >= n:
                 break
             if occ[y, x]:
                 continue
-            self.agents.append(self._make("MARABUNTA", y, x))
+            ag = self._make("MARABUNTA", y, x)
+            ag.advance = adv
+            ag.facing = adv if adv != (0, 0) else ag.facing
+            self.agents.append(ag)
             occ[y, x] = True
             made += 1
         self.version += 1
@@ -374,4 +481,12 @@ class Simulation:
             "stressed": a.colony.is_stressed(),
             "burning": int((a.fire.matrix == BURNING).sum()),
             "ash": int((a.fire.matrix == ASH).sum()),
+            "loot": len(a.loot.items),
+            "stolen": a.colony.stolen_units,
+            "recovered": a.colony.recovered_units,
+            "lost": a.colony.lost_units,
+            "rain_zones": len(a.weather.zones_of("rain")),
+            "drought_zones": len(a.weather.zones_of("drought")),
+            "game_over": self.game_over,
+            "game_over_reason": self.game_over_reason,
         }

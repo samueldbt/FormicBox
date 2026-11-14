@@ -36,6 +36,10 @@ ESPACIO = {
     "RESOURCE_MIN_DIST": [8, 15, 25],
     "SPAWN_INTERVAL": [8, 12],
     "MANGO_BITES": [60, 120, 200],
+    "SEARCH_DEPLETED": [True, False],
+    "SEARCH_TICKS": [8, 14, 24],
+    "MARA_SENSE": ["contact", "smell"],
+    "MARA_RAID_MODE": ["column", "swarm"],
 }
 ESPECIALES = {"PHEROMONE_MODE_FOOD", "TABU_WORKER", "EVAP_FOOD"}
 
@@ -75,6 +79,7 @@ def correr(job):
     c = sim.automaton.colony
     pop0 = config.INITIAL_WORKERS + config.INITIAL_SOLDIERS
     pop_peak, first, hw = pop0, None, []
+    t_start = time.perf_counter()
     for t in range(ticks):
         if ataque is not None and sim.tick == ataque:
             sim.spawn_swarm(config.SWARM_SIZE)
@@ -87,6 +92,7 @@ def correr(job):
             hw.append(int((sim.traffic >= config.TRAFFIC_HIGHWAY).sum()))
         if sim.game_over:
             break
+    elapsed = max(1e-9, time.perf_counter() - t_start)
     tr = np.sort(sim.traffic.ravel())[::-1]
     tot = float(tr.sum())
     k = max(1, int(0.05 * tr.size))
@@ -95,6 +101,8 @@ def correr(job):
     ph = sim.automaton.pheromones
     trail_cells = int(((ph["vegetal"].matrix + ph["azucar"].matrix) >= 0.5).sum())
     return {
+        "stolen": round(c.stolen_units, 1), "recovered": round(c.recovered_units, 1),
+        "lost_loot": round(c.lost_units, 1), "escaped": sim.escaped,
         "params": params, "semilla": semilla,
         "pop0": pop0, "pop_end": pop_end, "pop_peak": pop_peak, "births": sim.births,
         "units_end": round(c.food_units(), 1), "delivered_units": round(c.delivered_units(), 1),
@@ -108,6 +116,9 @@ def correr(job):
         "extinct": int(sim.game_over or pop_end == 0),
         "ticks_run": sim.tick,
         "trail_cells": trail_cells,
+        "ticks_per_sec": round(sim.tick / elapsed, 1),
+        "ms_per_tick": round(1000.0 * elapsed / max(1, sim.tick), 3),
+        "deaths_lightning": causas.get("LIGHTNING", 0),
     }
 
 
@@ -151,7 +162,8 @@ def escribir_informe(filas, filas_csv, args, seg):
     ruta_csv, ruta_md = f"reportes/barrido_{sello}.csv", f"reportes/barrido_{sello}.md"
     cols = ["puntaje", "pop0", "pop_end", "pop_peak", "births", "highway", "traffic_peak", "traffic_conc",
             "delivered_units", "first_delivery", "deaths_energy", "lost_with_food", "deaths_hunger",
-            "deaths_fire", "deaths_fight", "extinct", "units_end", "trail_cells"]
+            "deaths_fire", "deaths_fight", "deaths_lightning", "extinct", "units_end", "trail_cells", "stolen", "recovered", "lost_loot", "escaped",
+            "ticks_per_sec", "ms_per_tick"]
     with open(ruta_csv, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(["params"] + cols)
@@ -174,6 +186,21 @@ def escribir_informe(filas, filas_csv, args, seg):
             out.append(f"| {i} | {r['puntaje']:.1f} | {r['pop_end']:.0f} | {r['highway']:.0f} | {r['lost_with_food']:.1f} | "
                        f"{r['deaths_hunger']:.1f} | {r['extinct']:.2f} | {r['params']} |")
         return out
+    L += ["## Rendimiento y botín (media de todas las combinaciones)", ""]
+    prom = lambda k: statistics.mean(r[k] for r in filas)
+    L += [f"- Velocidad: **{prom('ticks_per_sec'):.0f} ticks/s** ({prom('ms_per_tick'):.2f} ms/tick); "
+          f"la más lenta: {min(r['ticks_per_sec'] for r in filas):.0f} ticks/s",
+          f"- Botín: robado {prom('stolen'):.1f} u | recuperado {prom('recovered'):.1f} u | perdido al salir del mapa {prom('lost_loot'):.1f} u",
+          f"- Bajas: combate {prom('deaths_fight'):.1f} | fuego {prom('deaths_fire'):.1f} | rayo {prom('deaths_lightning'):.1f} | "
+          f"hambre {prom('deaths_hunger'):.1f}", "",
+          "## Comandos sugeridos", "",
+          "```",
+          "python barrido.py --ticks 1500 --semillas 3 --max 40            # barrido general",
+          "python barrido.py --ataque 600 --ticks 2000 --max 20            # ¿sobrevive a un enjambre en el tick 600?",
+          "python barrido.py --clima --ticks 3000 --semillas 5 --max 20    # con lluvia, sequía y rayos",
+          "python barrido.py --escenario corridor --ticks 800 --procesos 1 # un escenario, sin paralelismo (mide ticks/s limpio)",
+          "python analisis.py                                              # equilibrio analítico (no simula)",
+          "```", ""]
     L += ["## Mejores 10", ""] + tabla(filas[:10]) + ["", "## Peores 3", ""] + tabla(filas[-3:]) + ["",
           "## Efecto de cada parámetro (puntaje medio por valor)", ""]
     for k in ESPACIO:
@@ -196,8 +223,11 @@ def main():
     ap.add_argument("--procesos", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     ap.add_argument("--escenario", default=None)
     ap.add_argument("--ataque", type=int, default=None)
+    ap.add_argument("--clima", action="store_true", help="activa lluvia, sequía y rayos automáticos (WEATHER_AUTO)")
     args = ap.parse_args()
 
+    config.WEATHER_AUTO = args.clima
+    BASE["WEATHER_AUTO"] = args.clima
     combos = combinaciones(args.max)
     jobs = [(p, s, args.ticks, args.escenario, args.ataque) for p in combos for s in range(1, args.semillas + 1)]
     print(f"{len(combos)} combinaciones x {args.semillas} semillas = {len(jobs)} corridas de {args.ticks} ticks")

@@ -15,7 +15,7 @@ FAMILY_COLORS = {   # (relleno, borde) de los placeholders
     "rock": (config.COLOR_ROCK, (55, 55, 55)),
     "grass2": ((20, 110, 20), config.COLOR_DIRT),
 }
-CARRY_COLORS = {1: config.COLOR_GRASS, 2: config.COLOR_MANGO, 3: config.COLOR_BOCADILLO}
+CARRY_COLORS = {1: config.COLOR_GRASS, 2: config.COLOR_MANGO, 3: config.COLOR_BOCADILLO, 4: (240, 190, 40)}
 
 
 def fit_to_tile(img, size=None):
@@ -87,6 +87,8 @@ class AssetManager:
         return self.add(fit_to_tile(img) if img else placeholder())
 
     def _load_tiles(self):
+        self._loot = {}
+        self._loot_art = self._read(manifest.LOOT)
         self.dirt = self._tile("dirt", lambda: self._solid(config.COLOR_DIRT))
         self.nest = self._tile("nest", self._ph_nest)
         self.ash = self._tile("ash", lambda: self._solid(config.COLOR_ASH, 170))
@@ -98,6 +100,21 @@ class AssetManager:
             img = self._read(rel)
             self.block_big[kind] = pygame.transform.scale(img, (2 * T, 2 * T)) if img else None
 
+    def loot_surface(self, has_brood):
+        """Botín: dorado si lleva crías, morado si solo comida. Usa el arte real si existe."""
+        s = self._loot.get(has_brood)
+        if s is None:
+            if self._loot_art is not None:
+                s = fit_to_tile(self._loot_art)
+            else:
+                s = self._surf()
+                col = (240, 190, 40) if has_brood else (150, 60, 200)
+                r = pygame.Rect(self.T // 2 - 8, self.T // 2 - 8, 16, 16)
+                pygame.draw.rect(s, col, r)
+                pygame.draw.rect(s, (255, 255, 255), r, 1)
+            self._loot[has_brood] = s
+        return s
+    
     def block_surface(self, kind, left, total):
         """Imagen 2x2 según las mordidas restantes, cuantizada a 12 niveles (con caché)."""
         steps = 12

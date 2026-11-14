@@ -4,7 +4,6 @@ import config
 try:
     from scipy.ndimage import convolve as _convolve
 except ImportError:          # sin SciPy se usa la suma con slices (equivalente)
-    print('sin scipy, no se usa convolociones')
     _convolve = None
 
 _MOORE_KERNEL = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.float32)

@@ -21,6 +21,8 @@ class Percept:
     trail_here: float = 0.0
     enemy: object = None         # enemigo vivo más cercano a la vista
     allies: int = 0
+    loot: tuple = None           # (y, x, distancia_manhattan) del botín visible más cercano
+    loot_here: bool = False
 
 
 def perceive(ant, automaton, ignore=()):
@@ -56,6 +58,17 @@ def perceive(ant, automaton, ignore=()):
             best, best_score = (y, x, kind, d), score
     p.resource = best
 
+    # Botín visible (marabuntas caídas con carga)
+    lt = automaton.loot
+    p.loot_here = lt.at(ant.y, ant.x) is not None
+    best_l = None
+    for (ly, lx) in lt.items:
+        if (ly, lx) != (ant.y, ant.x) and y0 <= ly < y1 and x0 <= lx < x1:
+            d = abs(ly - ant.y) + abs(lx - ant.x)
+            if best_l is None or d < best_l[2]:
+                best_l = (ly, lx, d)
+    p.loot = best_l
+    
     # Fuego visible
     fy, fx = np.nonzero(fire[y0:y1, x0:x1] > 0)
     if len(fy):

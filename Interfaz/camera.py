@@ -29,8 +29,8 @@ class Camera:
 
     def update(self, keys, dt):
         import pygame
-        dx = (keys[pygame.K_RIGHT] or keys[pygame.K_d]) - (keys[pygame.K_LEFT] or keys[pygame.K_a])
-        dy = (keys[pygame.K_DOWN] or keys[pygame.K_s]) - (keys[pygame.K_UP] or keys[pygame.K_w])
+        dx = (keys[pygame.K_RIGHT]) - (keys[pygame.K_LEFT])
+        dy = (keys[pygame.K_DOWN]) - (keys[pygame.K_UP])
         self._x += dx * config.CAMERA_SPEED * dt
         self._y += dy * config.CAMERA_SPEED * dt
         self._clamp()

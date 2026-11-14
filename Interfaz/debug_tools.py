@@ -5,10 +5,10 @@ from Automata.objects import GRASS, MANGO
 
 # (id, etiqueta del botón)
 TOOLS = [
-    ("INSPECT", "Ver"), ("WORKER", "Obrera"), ("SOLDIER", "Soldada"),
-    ("MARABUNTA", "Marabunta"), ("GRASS", "Pasto"), ("MANGO", "Mango"),
-    ("BOCADILLO", "Bocad."), ("FIRE", "Fuego"), ("KILL", "Matar"),
-    ("KILL_FIRE", "Quemar"),
+    ("INSPECT", "Ver"), ("WORKER", "Obrera"), ("SOLDIER", "Soldada"), ("MARABUNTA", "Marab."),
+    ("GRASS", "Pasto"), ("MANGO", "Mango"), ("BOCADILLO", "Bocad."), ("FIRE", "Fuego"),
+    ("KILL", "Matar"), ("KILL_FIRE", "Quemar"), ("RAIN", "Lluvia"), ("DROUGHT", "Sequia"),
+    ("LIGHTNING", "Rayo"),
 ]
 
 TERRAIN_NAMES = ["Tierra", "Roca", "Agua", "Nido"]
@@ -40,6 +40,12 @@ class DebugTools:
             ok = s.place_bocadillo(y, x)          # (y, x) = esquina superior izquierda
         elif t == "FIRE":
             ok = s.ignite(y, x)
+        elif t == "RAIN":
+            ok = s.rain(y, x)
+        elif t == "DROUGHT":
+            ok = s.drought(y, x)
+        elif t == "LIGHTNING":
+            ok = s.lightning(y, x)
         elif t == "KILL":
             ok = s.kill_at(y, x, "FIGHT")
         else:
@@ -53,6 +59,24 @@ class DebugTools:
     def random_fire(self):
         pos = self.sim.random_fire()
         self.message = f"Fuego en {pos}" if pos else "No hay nada combustible"
+
+    def rain_random(self):
+        self.sim.rain()
+        self.message = "Lluvia en una zona al azar"
+
+    def drought_random(self):
+        self.sim.drought()
+        self.message = "Sequia en una zona al azar"
+
+    def toggle_weather_auto(self):
+        config.WEATHER_AUTO = not config.WEATHER_AUTO
+        self.message = f"Clima automatico: {'ON' if config.WEATHER_AUTO else 'off'}"
+
+    def wind_add(self, dx, dy):
+        """WASD: suma un paso al viento (limitado a +-1); una tecla contraria lo cancela."""
+        c = lambda v: max(-1.0, min(1.0, v))
+        self.sim.set_wind(c(config.WIND_X + dx * config.WIND_STEP), c(config.WIND_Y + dy * config.WIND_STEP))
+        self.message = f"Viento: ({config.WIND_X:.1f}, {config.WIND_Y:.1f})"
 
     def wind(self, dx, dy):
         self.sim.set_wind(dx * config.WIND_STEP, dy * config.WIND_STEP)

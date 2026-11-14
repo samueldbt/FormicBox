@@ -30,6 +30,9 @@ class Colony:
         self.delivered = {GRASS: 0, MANGO: 0, BOCADILLO: 0}                       # acumulado histórico (items)
         self.stock = {k: int(config.START_STOCK.get(n, 0)) for n, k in KINDS.items()}   # reserva actual (items)
         self.credit = 0.0         # "cambio": sobrante cuando un pago se pasa de la cuenta
+        self.stolen_units = 0.0     # robado por marabuntas (acumulado)
+        self.lost_units = 0.0       # salió del mapa con una marabunta (perdido para siempre)
+        self.recovered_units = 0.0  # rescatado por obreras y soldadas
         self.brood = []           # [{"caste", "ticks_left"}]
         self.starving = False
         self._tick = 0
@@ -172,3 +175,42 @@ class Colony:
 
     def brood_count(self, caste=None):
         return sum(1 for b in self.brood if caste is None or b["caste"] == caste)
+
+    # ------------------------------------------------------------ saqueo y botín (Fase 4)
+    @staticmethod
+    def loot_units(food, brood):
+        """Valor en unidades de bolsa de un botín: comida + lo que costó cada cría."""
+        u = sum(q * config.FOOD_VALUE[NAMES[int(k)]] for k, q in food.items())
+        return u + sum(config.CASTE_COST[b["caste"]] for b in brood)
+
+    def steal_brood(self, n):
+        """Quita hasta n crías en desarrollo (conservan su tiempo restante). Devuelve la lista."""
+        taken, self.brood = self.brood[:n], self.brood[n:]
+        self.stolen_units += self.loot_units({}, taken)
+        return taken
+
+    def steal_food(self, n):
+        """Quita hasta n items de la bolsa (lo más valioso primero). Devuelve {tipo: cantidad}."""
+        out = {}
+        for name in config.EAT_ORDER:
+            if n <= 0:
+                break
+            k = KINDS[name]
+            take = min(self.stock[k], n)
+            if take > 0:
+                self.stock[k] -= take
+                out[k] = out.get(k, 0) + take
+                n -= take
+        self.stolen_units += self.loot_units(out, [])
+        self.update_fungus_state()
+        self.update_starving()
+        return out
+
+    def return_loot(self, loot):
+        """Un botín rescatado vuelve al nido: la comida a la bolsa y las crías a desarrollo."""
+        for k, q in loot.food.items():
+            self.stock[k] += q
+        self.brood.extend(loot.brood)
+        self.recovered_units += self.loot_units(loot.food, loot.brood)
+        self.update_fungus_state()
+        self.update_starving()

@@ -12,13 +12,20 @@ class Worker(Ant):
     def __init__(self, y, x, nest_pos, agents=None):
         super().__init__(y, x, nest_pos, agents)
         self.carried_resource = NONE
-        self.trail = 0.0          # fuerza del rastro al volver (1.0 al tomar, decae por paso)
+        self.carried_loot = None      # botín de una marabunta caída (Loot) que lleva al nido
+        self.loot_target = None       # (y, x) del botín visto
+        self.trail = 0.0              # fuerza del rastro al volver (1.0 al tomar, decae por paso)
         self.clean_last = 0.0
         self._ignore = set()
+        # Búsqueda local
+        self.search_center = None
+        self.search_ticks = 0
+        self.search_cool = 0
+        self._depleted_at = None      # punto donde se descubrió que la fuente se agotó
         # Memoria de ruta
-        self.route = []           # celdas del regreso (fuente -> nido), se llena al volver con carga
-        self.route_out = []       # ruta de ida (nido -> fuente), para repetirla tras entregar
-        self.route_idx = {}       # celda -> posición en route_out
+        self.route = []               # celdas del regreso (fuente -> nido), se llena al volver con carga
+        self.route_out = []           # ruta de ida (nido -> fuente), para repetirla tras entregar
+        self.route_idx = {}           # celda -> posición en route_out
         self.route_pos = 0
         self.route_lost = 0
 
@@ -31,8 +38,9 @@ class Worker(Ant):
             return
         self._ignore = self._ignored_kinds(automaton)
         p = self.percept = self.perceive(automaton, self._ignore)
+        self.search_cool = max(0, self.search_cool - 1)
         self._update_memory(automaton, p)
-        self._update_route_pos()
+        self._update_route_pos(p)
         self._evaluate_state(automaton, p)
         self._move(automaton, occupied_mask, p)
 
@@ -46,8 +54,16 @@ class Worker(Ant):
             return {BOCADILLO}
         return set()
 
-    # ------------------------------------------------------------ memoria de recurso
+    # ------------------------------------------------------------ memoria de recurso y de botín
     def _update_memory(self, automaton, p):
+        # El botín visible tiene prioridad sobre cualquier recurso
+        if p.loot is not None:
+            self.loot_target = (p.loot[0], p.loot[1])
+        elif self.loot_target is not None:
+            ty, tx = self.loot_target
+            if max(abs(ty - self.y), abs(tx - self.x)) <= config.VISION_RADIUS and automaton.loot.at(ty, tx) is None:
+                self.loot_target = None
+
         if p.resource is not None:
             self.mem_target = (p.resource[0], p.resource[1])
             self.mem_ttl = config.MEMORY_TICKS
@@ -58,8 +74,13 @@ class Worker(Ant):
             self.mem_ttl -= 1
             ty, tx = self.mem_target
             visible = max(abs(ty - self.y), abs(tx - self.x)) <= config.VISION_RADIUS
-            if self.mem_ttl <= 0 or (visible and automaton.objects.matrix[ty, tx] == NONE):
+            if self.mem_ttl <= 0:
                 self.mem_target = None
+            elif visible and automaton.objects.matrix[ty, tx] == NONE:
+                self.mem_target = None                      # la fuente se agotó
+                if (self.carried_resource == NONE and self.carried_loot is None
+                        and self.state == config.STATE_EXPLORE):
+                    self._depleted_at = (ty, tx)
 
     # ------------------------------------------------------------ memoria de ruta
     def _record_route(self):
@@ -87,16 +108,19 @@ class Worker(Ant):
         self.route_out, self.route_idx = [], {}
         self.route_pos = self.route_lost = 0
 
-    def _update_route_pos(self):
+    def _update_route_pos(self, p):
         if not self.route_out:
             return
-        if self.state in (config.STATE_FEED, config.STATE_FLEE, config.STATE_RETURN, config.STATE_CLEAN):
+        if self.state in (config.STATE_FEED, config.STATE_FLEE, config.STATE_RETURN,
+                          config.STATE_CLEAN, config.STATE_SEARCH):
             self._drop_route()
             return
         i = self.route_idx.get((self.y, self.x))
         if i is not None and i > self.route_pos:
             self.route_pos = i
         if self.route_pos >= len(self.route_out) - 1:       # llegó a la fuente
+            if p.resource_here == NONE and p.resource is None:
+                self._depleted_at = (self.y, self.x)         # y ya no hay nada: a buscar alrededor
             self._drop_route()
 
     def _route_next(self, neighbors):
@@ -125,13 +149,16 @@ class Worker(Ant):
             if rule(automaton, p):
                 return
 
+    def _loaded(self):
+        return self.carried_resource != NONE or self.carried_loot is not None
+
     def _rule_flee(self, automaton, p):
         fire_close = p.fire_dist is not None and p.fire_dist <= config.FIRE_ALERT_RADIUS
         if p.alarm_here > 0.5 or fire_close:
             self.state = config.STATE_FLEE
             return True
         if self.state == config.STATE_FLEE:
-            self.state = config.STATE_RETURN if self.carried_resource != NONE else config.STATE_EXPLORE
+            self.state = config.STATE_RETURN if self._loaded() else config.STATE_EXPLORE
         return False
 
     def _rule_refuel_nest(self, automaton, p):
@@ -141,6 +168,11 @@ class Worker(Ant):
             automaton.colony.deliver(self.carried_resource)
             self.carried_resource = NONE
             self._store_route()
+            automaton.emit("deliver", self.y, self.x)
+        if self.carried_loot is not None:
+            automaton.colony.return_loot(self.carried_loot)
+            self.carried_loot = None
+            automaton.emit("deliver", self.y, self.x)
         self.trail = 0.0
         self.refuel_at_nest(automaton)
         self.state = config.STATE_EXPLORE
@@ -157,10 +189,22 @@ class Worker(Ant):
             return True
         return False
 
+    def _rule_loot(self, automaton, p):
+        """Recoge el botín de la celda y lo lleva al nido (las crías conservan su tiempo restante)."""
+        if self._loaded() or not p.loot_here:
+            return False
+        if self.state not in (config.STATE_EXPLORE, config.STATE_SEARCH, config.STATE_CLEAN):
+            return False
+        self.carried_loot = automaton.loot.take(self.y, self.x)
+        self.loot_target = None
+        self._drop_route()
+        self.state = config.STATE_RETURN
+        return True
+
     def _rule_pickup(self, automaton, p):
         kind = p.resource_here
-        if (self.carried_resource == NONE and kind != NONE and kind not in self._ignore
-                and self.state == config.STATE_EXPLORE):
+        if (self.carried_resource == NONE and self.carried_loot is None and kind != NONE
+                and kind not in self._ignore and self.state == config.STATE_EXPLORE):
             best = p.resource
             if (best is not None and best[3] <= config.PREFER_BETTER_DIST
                     and config.food_value(best[2]) > config.food_value(kind)):
@@ -175,8 +219,8 @@ class Worker(Ant):
         return False
 
     def _rule_go_feed(self, automaton, p):
-        if self.carried_resource != NONE or self.state not in (
-                config.STATE_EXPLORE, config.STATE_FEED, config.STATE_CLEAN):
+        if self._loaded() or self.state not in (
+                config.STATE_EXPLORE, config.STATE_FEED, config.STATE_CLEAN, config.STATE_SEARCH):
             return False
         if self.low_energy(automaton) and automaton.colony.has_food():
             self.state = config.STATE_FEED
@@ -185,7 +229,7 @@ class Worker(Ant):
             self.state = config.STATE_EXPLORE
         return False
 
-    # ---- limpieza de callejones: retrocede borrando el rastro cuyo recurso ya se acabó
+    # ---- fuente agotada: búsqueda local en espiral
     def _trail_at(self, automaton, y, x):
         ph = automaton.pheromones
         v = float(ph["vegetal"].matrix[y, x])
@@ -207,6 +251,62 @@ class Worker(Ant):
                     top = max(top, self._trail_at(automaton, ny, nx))
         return here >= config.CLEAN_TIP_MARGIN * top
 
+    def _tip_here(self, automaton):
+        return (self.mem_target is None and not self.route_out
+                and self._at_tip(automaton, self._trail_at(automaton, self.y, self.x)))
+
+    def _rule_search(self, automaton, p):
+        if not config.SEARCH_DEPLETED:
+            if self.state == config.STATE_SEARCH:
+                self.state = config.STATE_EXPLORE
+            self._depleted_at = None
+            return False
+        found = p.resource is not None or p.resource_here != NONE or p.loot is not None
+        if self.state == config.STATE_SEARCH:
+            self.search_ticks += 1
+            if found:                                   # apareció comida (o botín): a por ella
+                self.state = config.STATE_EXPLORE
+                return False
+            if self.search_ticks > config.SEARCH_TICKS:  # se rinde
+                self._end_search()
+                return False
+            return True
+        if self.state != config.STATE_EXPLORE or self._loaded() or found:
+            self._depleted_at = None
+            return False
+        center = self._depleted_at
+        if center is None and self.search_cool == 0 and self._tip_here(automaton):
+            center = (self.y, self.x)
+        if center is None:
+            return False
+        self.state = config.STATE_SEARCH
+        self.search_center = center
+        self.search_ticks = 0
+        self._depleted_at = None
+        self.mem_target = None
+        return True
+
+    def _end_search(self):
+        self.search_center = None
+        self.search_ticks = 0
+        self.search_cool = config.SEARCH_COOLDOWN
+        self.mem_target = None
+        self._drop_route()
+        self.clean_last = 0.0
+        self.state = config.STATE_CLEAN if config.CLEAN_DEAD_TRAILS else config.STATE_EXPLORE
+
+    def _score_search(self, ny, nx, dy, dx):
+        """Espiral que se abre alrededor del punto: prefiere el anillo de radio R y gira en un solo sentido."""
+        cy, cx = self.search_center
+        R = 1.0 + (config.SEARCH_RADIUS - 1.0) * min(1.0, self.search_ticks / max(1, config.SEARCH_TICKS))
+        d_new = math.hypot(ny - cy, nx - cx)
+        ring = 1.0 - min(1.0, abs(d_new - R) / (R + 1.0))
+        ry, rx = self.y - cy, self.x - cx
+        n = math.hypot(ry, rx)
+        tang = max(0.0, (rx * dy - ry * dx) / (n * math.hypot(dy, dx))) if n > 0 else 0.0
+        return config.SEARCH_W_RING * ring + config.SEARCH_W_TANGENT * tang
+
+    # ---- limpieza de rastros muertos (opcional)
     def _rule_clean(self, automaton, p):
         if not config.CLEAN_DEAD_TRAILS:
             if self.state == config.STATE_CLEAN:
@@ -217,37 +317,35 @@ class Worker(Ant):
                 self.state = config.STATE_EXPLORE
                 return False
             return True                                                # el paso lo da _clean_step (en _move)
-        if (self.state == config.STATE_EXPLORE and self.carried_resource == NONE
+        if (self.state == config.STATE_EXPLORE and not self._loaded()
                 and p.resource is None and p.resource_here == NONE
-                and self.mem_target is None and not self.route_out):
-            if self._at_tip(automaton, self._trail_at(automaton, self.y, self.x)):
-                self.state = config.STATE_CLEAN
-                self.clean_last = 0.0
-                return True
+                and not config.SEARCH_DEPLETED and self._tip_here(automaton)):
+            self.state = config.STATE_CLEAN
+            self.clean_last = 0.0
+            return True
         return False
 
     def _clean_step(self, automaton, neighbors):
-        """Borra el rastro de esta celda y retrocede hacia el vecino con más rastro. False = termina."""
+        """Borra el rastro de esta celda y baja por la pendiente. Se detiene si el rastro se acaba o si hay un
+        cruce (dos caminos que bajan): ahí empieza otro camino que puede estar vivo."""
         here = self._trail_at(automaton, self.y, self.x)
-        if self.clean_last > 0 and here > self.clean_last * 1.02:   # el rastro sube: es otro camino vivo
-            self.state, self.clean_last = config.STATE_EXPLORE, 0.0
-            return False
-        for name in ("vegetal", "azucar"):
-            automaton.pheromones[name].matrix[self.y, self.x] = 0.0
-        best, best_v = None, config.CLEAN_STOP_TRAIL
+        down = []
         for ny, nx, dy, dx in neighbors:
             v = self._trail_at(automaton, ny, nx)
-            if v > best_v:
-                best, best_v = (ny, nx), v
-        if best is None:
+            if config.CLEAN_STOP_TRAIL < v <= here * 1.001:
+                down.append((v, ny, nx))
+        for name in ("vegetal", "azucar"):
+            automaton.pheromones[name].matrix[self.y, self.x] = 0.0
+        if not down or sum(1 for d in down if d[0] >= 0.5 * here) > 1:
             self.state, self.clean_last = config.STATE_EXPLORE, 0.0
             return False
-        self.clean_last = here
-        self.commit_move(*best)
+        _, ny, nx = max(down)
+        self.commit_move(ny, nx)
         return True
 
     def _rule_explore(self, automaton, p):
-        if self.state not in (config.STATE_RETURN, config.STATE_FEED, config.STATE_FLEE, config.STATE_CLEAN):
+        if self.state not in (config.STATE_RETURN, config.STATE_FEED, config.STATE_FLEE,
+                              config.STATE_CLEAN, config.STATE_SEARCH):
             self.state = config.STATE_EXPLORE
         return True
 
@@ -284,6 +382,8 @@ class Worker(Ant):
                                             (ny, nx) == route_next)
             elif self.state in (config.STATE_FEED, config.STATE_RETURN):
                 score = config.WEIGHT_HOME * (align + 1.0) / 2.0
+            elif self.state == config.STATE_SEARCH and self.search_center is not None:
+                score = self._score_search(ny, nx, dy, dx)
             else:  # FLEE: lejos del fuego y hacia el nido
                 heat = self.fire_heat(automaton, ny, nx)
                 score = config.WEIGHT_FLEE * (1.0 - heat) + 0.5 * config.WEIGHT_HOME * (align + 1.0) / 2.0
@@ -295,7 +395,7 @@ class Worker(Ant):
         self.commit_move(*self.pick_move(moves, scores))
 
     def _score_explore(self, ny, nx, dy, dx, t_veg, t_sug, t_here, align, heading, sugar_ok, on_route):
-        """Rastro saturado + subir la pendiente + inercia + empuje de salida + recurso + ruta recordada."""
+        """Rastro saturado + subir la pendiente + inercia + empuje de salida + recurso/botín + ruta recordada."""
         K = config.EXPLORE_TRAIL_K
         ws = config.WEIGHT_SUGAR if sugar_ok else 0.0
         t_sug = t_sug if sugar_ok else 0.0
@@ -320,11 +420,15 @@ class Worker(Ant):
         puerta = config.EXPLORE_DOOR_PUSH * max(0.0, 1.0 - d_nido / config.EXPLORE_DOOR_RADIUS) * afuera
 
         objetivo = 0.0
-        if self.mem_target is not None:
-            ty, tx = self.mem_target
+        if self.loot_target is not None:
+            tgt, w = self.loot_target, config.WEIGHT_RESCUE
+        else:
+            tgt, w = self.mem_target, config.WEIGHT_RESOURCE
+        if tgt is not None:
+            ty, tx = tgt
             d_now = abs(self.y - ty) + abs(self.x - tx)
             d_new = abs(ny - ty) + abs(nx - tx)
-            objetivo = config.WEIGHT_RESOURCE * (d_now - d_new + 1.0) / 2.0
+            objetivo = w * (d_now - d_new + 1.0) / 2.0
 
         ruta = config.ROUTE_BONUS if on_route else 0.0
         return rastro + inercia + puerta + objetivo + ruta

@@ -12,6 +12,7 @@ BIRTH_INTERVAL = 3               # cada cuántos ticks se intenta iniciar una cr
 BIRTH_SOLDIER_RATIO = 0.15
 MAX_POPULATION = 100             # vivas + cola de salida + crías en desarrollo
 STARVATION_INTERVAL = 10         # con la bolsa vacía, muere una hormiga cada tantos ticks
+GAME_OVER_GRACE = 30             # ticks seguidos en estado irrecuperable antes de declarar el fin (evita falsos positivos)
 
 USE_SCIPY_CONVOLUTION = True
 
@@ -46,6 +47,32 @@ FIRE_BURNOUT_BASE = 0.30         # prob. por tick de apagarse (pasados 5 ticks)
 FIRE_BURNOUT_MOISTURE = 0.50     # + esto * humedad (la humedad apaga más rápido)
 ASH_TICKS = 20
 FIRE_ALERT_RADIUS = 2
+
+# ------------------------------------------------------------ Clima (Fase 6)
+WEATHER_AUTO = False          # True = lluvia, sequía y rayos aparecen solos (útil en Lucha/Testeo)
+WEATHER_RAMP_TICKS = 10       # una zona de clima entra y sale gradualmente en este tiempo
+MOISTURE_RECOVERY = 0.003     # fracción por tick con la que la humedad vuelve a su valor base (lluvia/sequía se desvanecen)
+RAIN_RADIUS = 7
+RAIN_TICKS = 120
+RAIN_RATE = 0.03              # humedad que sube por tick en el centro de la lluvia (a intensidad 1)
+RAIN_EXTINGUISH_PROB = 0.35   # prob. por tick de apagar una celda ardiendo bajo la lluvia (centro, intensidad 1)
+DROUGHT_RADIUS = 8
+DROUGHT_TICKS = 200
+DROUGHT_RATE = 0.012          # humedad que baja por tick en el centro de la sequía
+RAIN_AUTO_PROB = 0.002        # por tick, solo con WEATHER_AUTO
+DROUGHT_AUTO_PROB = 0.001
+LIGHTNING_BASE_PROB = 0.0008  # por tick, solo con WEATHER_AUTO
+LIGHTNING_RAIN_MULT = 8.0     # con lluvia activa la probabilidad se multiplica por esto (y cae dentro de la lluvia)
+LIGHTNING_IGNITE_MOISTURE_C = 1.0   # prob. de ignición = exp(-C * humedad) en rayos AUTOMÁTICOS (0 = siempre prende)
+LIGHTNING_HEIGHT_CELLS = 8    # altura del rayo en celdas
+LIGHTNING_FLASH_TICKS = 2     # cuánto dura visible
+LIGHTNING_BRANCH_PROB = 0.020 # prob. por píxel de bifurcarse
+LIGHTNING_WANDER = 0.55       # prob. por píxel de desviarse de lado
+LIGHTNING_MAX_DRIFT = 28      # desvío lateral máximo del tronco (px)
+LIGHTNING_PIXEL = 1           # tamaño del píxel del rayo (px de pantalla)
+MOISTURE_VIEW_BLUE = (40, 110, 255)    # película de humedad
+MOISTURE_VIEW_DRY = (230, 190, 40)     # película de zonas secas
+MOISTURE_DRY_BELOW = 0.25              # por debajo de esta humedad se pinta amarillento
 
 # Terrain Densities
 ROCK_DENSITY = 0.40
@@ -153,6 +180,16 @@ DEPOSIT_AMOUNT_MANGO = 6.0
 DEPOSIT_AMOUNT_BOCADILLO = 8.0
 DEPOSIT_AMOUNT_DEATH_ALARM = 40.0
 
+# Búsqueda local al llegar a una fuente agotada
+SEARCH_DEPLETED = True       # False = va directo a limpiar (si CLEAN_DEAD_TRAILS) o a explorar
+SEARCH_TICKS = 14            # cuánto dura la espiral de búsqueda
+SEARCH_RADIUS = 3            # radio máximo de la espiral (celdas)
+SEARCH_COOLDOWN = 60         # ticks sin volver a buscar en la punta de un rastro
+SEARCH_W_RING = 4.0
+SEARCH_W_TANGENT = 3.0
+STATE_SEARCH = "SEARCH"
+WEIGHT_RESCUE = 8.0          # atracción de obreras y soldadas hacia un botín visible
+
 # ------------------------------------------------------------ Soldadas
 SOLDIER_PATROL_RADIUS = 12   # distancia máxima al nido al patrullar (celdas)
 SOLDIER_HEALTH = 10.0
@@ -175,6 +212,17 @@ SWARM_SIZE = 10
 SWARM_MIN_DIST = 20          # distancia mínima por camino al nido al aparecer (> radio de patrulla 12 + margen)
 SWARM_POOL = 12              # elige al azar entre las N celdas de borde más cercanas que cumplan
 
+MARA_SENSE = "smell"       # "contact": ciegas, solo detectan por contacto | "smell": huelen el nido (BFS) y sienten presas a MARA_SENSE_RADIUS
+MARA_RAID_MODE = "swarm"    # "column": frente estrecho que sigue su rastro | "swarm": abanico que se esparce
+MARA_CONTACT_RADIUS = 1      # radio de detección de presas en modo contacto
+MARA_W_ADVANCE = 4.0         # empuje hacia adelante (modo contacto)
+MARA_W_SPREAD = 3.0          # repulsión del rastro propio en modo abanico
+MARA_CARRY_CAPACITY = 20     # items de botín (comida + crías) que caben en su inventario
+MARA_STEAL_PER_TICK = 4
+MARA_MEMORY_TICKS = 40       # memoria corta: última posición donde tocaron un enemigo
+MARA_NEST_MEMORY_TICKS = 120 # memoria del nido (lo recuerdan más tiempo) una vez que lo tocaron
+MARA_W_MEMORY = 5.0          # empuje hacia el punto recordado cuando perdieron el contacto
+
 # ------------------------------------------------------------ Población y tiempo
 SPAWN_INTERVAL = 8           # ticks entre una salida del nido y la siguiente
 SCOUT_TIMEOUT = 300          # si la primera no entrega nada en este tiempo, se abre la salida igual
@@ -184,6 +232,22 @@ TICK_SECONDS = 1.0
 ANIM_FRAMES = 6
 FPS = 60
 MAX_STEPS_PER_FRAME = 4
+
+# ---------------------------------------------------------------Audio y escenas
+VOL_MASTER = 0.8
+VOL_MUSIC = 0.6
+VOL_SFX = 0.8
+AUDIO_MAX_DIST = 40          # celdas a las que un efecto deja de oírse
+AUDIO_FADE_SECONDS = 2.0     # duración del crossfade calma <-> lucha
+LUCHA_SWARM_EVERY = 300      # ticks entre oleadas en el modo Lucha
+
+# ------------------------------------------------------------ Teclas (nombres de pygame sin "K_")
+KEYS = {
+    "pause": "space", "step": "period", "restart": "r",
+    "wind_up": "w", "wind_left": "a", "wind_down": "s", "wind_right": "d", "wind_zero": "x",
+    "layer_vegetal": "v", "layer_azucar": "b", "layer_alarma": "n", "layer_caza": "m",
+    "layers_all": "z", "gradient": "g", "traffic": "t", "moisture": "h",
+}
 
 # ------------------------------------------------------------ Display
 TILE = 32
