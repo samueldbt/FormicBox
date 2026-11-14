@@ -134,4 +134,4 @@ El juego busca su arte y audio en `Assets/` (sprites de 32 × 32 px dibujados mi
 
 ## Autores
 
-German, Consuegra, Ever, Iván, Harold, Nicolás, Angel, David, Nikollas y Samuel — *Autómatas y Lenguajes Formales*, Universidad Industrial de Santander (UIS).
+Ashley, German, Consuegra, Ever, Iván, Harold, Nicolás, Angel, David, Nikollas y Samuel — *Autómatas y Lenguajes Formales*, Universidad Industrial de Santander (UIS).
