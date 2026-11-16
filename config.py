@@ -5,7 +5,8 @@ Si cambias una constante en caliente (como hace barrido.py), llama config.recomp
 """
 
 # ------------------------------------------------------------ Integración
-COLLISION_MODE = "allies_pass"   # o "block"
+COLLISION_MODE = "swap"   # "allies_pass" (se atraviesan) | "swap" (intercambian lugar) | "block"
+FOOD_LAYERS = 2                  # 2 = vegetal + azúcar (con campo de hogar) | 1 = una sola feromona de comida
 INITIAL_WORKERS = 20
 INITIAL_SOLDIERS = 3
 BIRTH_INTERVAL = 3               # cada cuántos ticks se intenta iniciar una cría
@@ -248,6 +249,23 @@ KEYS = {
     "layer_vegetal": "v", "layer_azucar": "b", "layer_alarma": "n", "layer_caza": "m",
     "layers_all": "z", "gradient": "g", "traffic": "t", "moisture": "h",
 }
+
+# ------------------------------------------------------------ Interfaz (HUD flotante)
+UI_PANEL_COLOR = (18, 20, 28)
+UI_PANEL_ALPHA = 165          # opacidad de los paneles (0-255)
+UI_BORDER_COLOR = (120, 130, 160)
+UI_ACCENT = (255, 205, 90)
+UI_OK_COLOR = (70, 150, 85)
+UI_TEXT_COLOR = (230, 230, 235)
+UI_DIM_COLOR = (150, 150, 165)
+UI_RADIUS = 8                 # esquinas redondeadas
+UI_BUTTON = 40                # lado de los botones de icono
+UI_ICON_SIZE = 32             # los iconos propios (Assets/ui/icons/<nombre>.png) se escalan a este tamaño
+UI_GAP = 6
+NOTIFY_SECONDS = 5.0
+HELP_BAR_H = 26
+BRUSH_SIZES = (1, 2, 3, 5)
+BRUSH_DEFAULT = 1             # índice en BRUSH_SIZES
 
 # ------------------------------------------------------------ Display
 TILE = 32

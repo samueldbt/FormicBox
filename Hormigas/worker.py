@@ -443,7 +443,7 @@ class Worker(Ant):
         elif kind == MANGO:
             name, amount = "vegetal", config.DEPOSIT_AMOUNT_MANGO
         elif kind == BOCADILLO:
-            name, amount = "azucar", config.DEPOSIT_AMOUNT_BOCADILLO
+            name, amount = ("vegetal" if config.FOOD_LAYERS == 1 else "azucar"), config.DEPOSIT_AMOUNT_BOCADILLO
         else:
             return
         automaton.deposit_pheromone(name, self.y, self.x, amount * self.trail)

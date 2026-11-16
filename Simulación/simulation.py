@@ -31,7 +31,12 @@ class Simulation:
         if self.scenario is not None:
             self.seed = get_scenario(self.scenario).seed
         random.seed(self.seed)
+        sc = get_scenario(self.scenario) if self.scenario is not None else None
+        self.no_ants = sc is not None and not sc.colony      # escenarios de fuego/clima: sin hormigas ni hambre
         self.automaton = CellularAutomaton(config.WIDTH, config.HEIGHT, self.seed, scenario=self.scenario)
+        if sc is not None and sc.ignite is not None:
+            iy, ix = int(sc.ignite[0] * config.HEIGHT), int(sc.ignite[1] * config.WIDTH)
+            self.automaton.fire.matrix[iy, ix] = BURNING
         self.agents = []                          # lista COMPARTIDA: solo se muta en sitio
         self.tick = 0
         self.version = 0
@@ -50,7 +55,7 @@ class Simulation:
         self.traffic = np.zeros((self.automaton.height, self.automaton.width), dtype=np.float32)
         castes = ["WORKER"] * config.INITIAL_WORKERS + ["SOLDIER"] * config.INITIAL_SOLDIERS
         random.shuffle(castes)
-        self.queue = deque(castes)
+        self.queue = deque() if self.no_ants else deque(castes)
         # Salida escalonada: la primera sale sola y las demás esperan a que entregue comida
         self.scout = None
         self.scout_tick = 0
@@ -97,7 +102,7 @@ class Simulation:
         self._hunger()
 
         # 4. Agentes en orden ALEATORIO cada tick (sin sesgo de movimiento)
-        pass_mode = config.COLLISION_MODE == "allies_pass"
+        pass_mode = config.COLLISION_MODE in ("allies_pass", "swap")
         if pass_mode:
             cnt, masks = self._group_masks()
         else:
@@ -125,6 +130,8 @@ class Simulation:
                     occupied[new] = new != nest
                 if not ag.attacking:
                     ag.facing = (new[0] - old[0], new[1] - old[1])
+        if config.COLLISION_MODE == "swap":
+            self._resolve_swaps(nest)
 
         # 5. Bajas: se cuentan por causa; en combate o fuego dejan alarma (una vez). Quien muere con botín lo suelta.
         for ag in self.agents:
@@ -172,6 +179,8 @@ class Simulation:
         iniciar una cría de obrera DE VERDAD (con la reserva de ciclos y sin hongo famélico). Antes se comparaba
         sin la reserva: la colonia quedaba "viva" pero sin poder nacer nada y el juego se congelaba sin terminar.
         Debe mantenerse GAME_OVER_GRACE ticks seguidos para no disparar por un bache momentáneo."""
+        if self.no_ants:
+            return
         c = self.automaton.colony
         workers = sum(1 for ag in self.agents if ag.alive and ag.CASTE == "WORKER")
         pending = c.brood_count("WORKER") + sum(1 for q in self.queue if q == "WORKER")
@@ -280,7 +289,7 @@ class Simulation:
     def _births(self):
         """El excedente (sobre 3 ciclos de alimento para toda la población y el hongo) se vuelve crías."""
         colony = self.automaton.colony
-        if self.queue or self.tick % config.BIRTH_INTERVAL != 0 or colony.starving:
+        if self.no_ants or self.queue or self.tick % config.BIRTH_INTERVAL != 0 or colony.starving:
             return
         pop = self._pop_counts()
         if sum(pop) >= config.MAX_POPULATION:
@@ -292,6 +301,8 @@ class Simulation:
 
     def _hunger(self):
         """Con la bolsa vacía, una hormiga muere (HUNGER) cada STARVATION_INTERVAL ticks."""
+        if self.no_ants:
+            return
         if self.automaton.colony.upkeep():
             self._starve_timer = 0
             return
@@ -301,6 +312,30 @@ class Simulation:
             victims = [ag for ag in self.agents if ag.alive and ag.CASTE != "MARABUNTA"]
             if victims:
                 random.choice(victims).die("HUNGER")
+
+    def _resolve_swaps(self, nest):
+        """Modo "swap": si una aliada llegó a una celda donde otra se quedó, intercambian lugares (la que estaba
+        pasa a la celda de la que llegó, si ahí no hay otra). Dos llegadas sin nadie que se quede siguen solapadas."""
+        occ = {}
+        for ag in self.agents:
+            if ag.alive:
+                occ.setdefault((ag.CASTE == "MARABUNTA", (ag.y, ag.x)), []).append(ag)
+        for (mara, cell), group in list(occ.items()):
+            if len(group) < 2 or cell == nest:
+                continue
+            arrivals = [g for g in group if (g.prev_y, g.prev_x) != cell]
+            stayers = [g for g in group if (g.prev_y, g.prev_x) == cell]
+            for arr in arrivals:
+                if not stayers:
+                    break
+                dest = (arr.prev_y, arr.prev_x)
+                if dest != nest and occ.get((mara, dest)):
+                    continue
+                other = stayers.pop()
+                other.facing = (dest[0] - cell[0], dest[1] - cell[1])
+                other.y, other.x = dest
+                occ[(mara, cell)].remove(other)
+                occ.setdefault((mara, dest), []).append(other)
 
     # ------------------------------------------------------------ máscaras de ocupación
     def _occupied_mask(self):
@@ -443,6 +478,21 @@ class Simulation:
         self.version += 1
         self.terrain_version += 1
         return True
+
+    def paint_terrain(self, kind, cells, erase=False):
+        """Pincel: pone ROCK/WATER/DIRT en varias celdas (no el nido ni bajo una hormiga). erase=True con DIRT también
+        borra objetos y fuego. Devuelve cuántas celdas pintó."""
+        a = self.automaton
+        busy = {(ag.y, ag.x) for ag in self.agents}
+        ok = [(y, x) for y, x in cells if (y, x) not in busy and (y, x) != self.nest]
+        n = a.place_terrain_cells(ok, kind, clear=True if erase else None)
+        if n:
+            for ag in self.agents:
+                if ag.alive and a.terrain.matrix[ag.y, ag.x] not in (DIRT, NEST):
+                    ag.die("FIGHT")
+            self.version += 1
+            self.terrain_version += 1
+        return n
 
     def erase_terrain(self, y, x):
         return self.place_terrain(DIRT, y, x)

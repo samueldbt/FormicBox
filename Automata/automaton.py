@@ -134,25 +134,38 @@ class CellularAutomaton:
             layer.added[mask] = 0.0
 
     def place_terrain(self, y, x, kind):
-        """Pone DIRT, ROCK o WATER en (y, x) y deja todo coherente.
-        La tierra que quede inalcanzable desde el nido se vuelve roca.
-        Devuelve False si no se pudo: fuera del mapa, tipo inválido o la celda es el nido."""
-        if kind not in (DIRT, ROCK, WATER):
-            return False
-        if not (0 <= y < self.height and 0 <= x < self.width):
+        """Una celda de DIRT, ROCK o WATER. False si es inválida (fuera del mapa, tipo malo o el nido)."""
+        if kind not in (DIRT, ROCK, WATER) or not (0 <= y < self.height and 0 <= x < self.width):
             return False
         if self.terrain.matrix[y, x] == NEST:
             return False
-        if self.terrain.matrix[y, x] == kind:
-            return True
-        self.terrain.matrix[y, x] = kind
+        self.place_terrain_cells([(y, x)], kind)
+        return True
 
-        if kind != DIRT:
-            cell = np.zeros((self.height, self.width), dtype=bool)
-            cell[y, x] = True
-            self._clear_cells(cell)
+    def place_terrain_cells(self, cells, kind, clear=None):
+        """Pinta varias celdas y rehace campos/humedad UNA sola vez (pinceles grandes sin tirones).
+        clear: borra objetos, fuego y feromona de las celdas (por defecto, salvo al poner tierra; con True la
+        tierra actúa de borrador). La tierra que quede aislada del nido se vuelve roca. Devuelve cuántas celdas tocó."""
+        if kind not in (DIRT, ROCK, WATER):
+            return 0
+        if clear is None:
+            clear = kind != DIRT
+        touched = np.zeros((self.height, self.width), dtype=bool)
+        changed = False
+        for y, x in cells:
+            if not (0 <= y < self.height and 0 <= x < self.width) or self.terrain.matrix[y, x] == NEST:
+                continue
+            touched[y, x] = True
+            if self.terrain.matrix[y, x] != kind:
+                self.terrain.matrix[y, x] = kind
+                changed = True
+        if not touched.any():
+            return 0
+        if clear:
+            self._clear_cells(touched)
+        if not changed:
+            return int(touched.sum())
 
-        # Conectividad: lo que quede aislado del nido pasa a roca
         was_rock = self.terrain.matrix == ROCK
         self.terrain._ensure_connectivity()
         sealed = (self.terrain.matrix == ROCK) & ~was_rock
@@ -169,7 +182,7 @@ class CellularAutomaton:
         self.terrain.moisture = np.clip(self.base_moisture + delta, 0.0, 1.0).astype(np.float32)
         self.terrain.moisture[self.terrain.matrix == WATER] = 1.0
         self.recompute_fields()
-        return True
+        return int(touched.sum())
 
     def deposit_pheromone(self, name, y, x, amount):
         """API para los agentes: deja feromona en una celda (se aplica en el próximo update)."""

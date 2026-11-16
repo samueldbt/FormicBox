@@ -3,6 +3,7 @@ import pygame
 import config
 from .scenes import Scene
 from .game import GodScene
+from .sandbox import SandboxScene
 from Simulación.simulation import Simulation
 
 ENTER = (pygame.K_RETURN, pygame.K_KP_ENTER)
@@ -68,11 +69,11 @@ class MenuScene(Scene):
         if key == "god":
             app.scenes.push(GodScene(app, Simulation()))
         elif key == "fight":
-            app.scenes.push(GodScene(app, Simulation(), waves=True))
+            app.scenes.push(GodScene(app, Simulation(scenario="open_field"), waves=True))
         elif key == "settings":
             app.scenes.push(SettingsScene(app))
         elif key == "test":
-            app.scenes.push(PlaceholderScene(app, "Testeo", "Fase 6: sandbox de comparación y escenarios"))
+            app.scenes.push(SandboxScene(app))
         elif key == "comp":
             app.scenes.push(PlaceholderScene(app, "Competitivo", "Se implementa al final"))
         elif key == "quit":

@@ -1,7 +1,7 @@
 """Dibuja las hormigas: posición visual interpolada, independiente de la posición lógica."""
+import pygame
 import config
 from .assets import DIR_INDEX
-
 
 # Desplazamiento (px a TILE=32) de las aliadas que comparten celda: la 1.ª al centro, las demás alrededor
 OFFSETS = ((0, 0), (9, -9), (-9, 9), (9, 9), (-9, -9), (0, 12), (12, 0), (0, -12), (-12, 0))
@@ -20,8 +20,8 @@ class EntityRenderer:
     def __init__(self, assets):
         self.A = assets
 
-    def draw(self, surf, cam, sim, s):
-        """s = progreso del tick actual (0..1)."""
+    def draw(self, surf, cam, sim, s, highlight=None):
+        """s = progreso del tick actual (0..1). highlight = ente fijado (se le dibuja un marco)."""
         T = config.TILE
         sp = self.A.sprites
         frame = min(config.ANIM_FRAMES - 1, int(s * config.ANIM_FRAMES))
@@ -30,6 +30,7 @@ class EntityRenderer:
         dead, alive = [], []
         slots = {}                                    # celda -> cuántas vivas ya dibujadas ahí (para el offset)
         k_off = T / 32.0
+        mark = None
 
         for ag in sim.agents:
             if getattr(ag, "escaped", False):
@@ -54,16 +55,21 @@ class EntityRenderer:
                 px, py = px + int(ox * k_off), py + int(oy * k_off)
                 alive.append((ag, action, carry, k, px, py))
             else:
-                action = {"FIRE": "DEAD_FIRE", "LIGHTNING": "DEAD_FIRE", "STARVE": "DEAD_STARVE", "HUNGER": "DEAD_STARVE"}.get(ag.death_cause, "DEAD_FIGHT")
+                action = {"FIRE": "DEAD_FIRE", "LIGHTNING": "DEAD_FIRE", "STARVE": "DEAD_STARVE",
+                          "HUNGER": "DEAD_STARVE"}.get(ag.death_cause, "DEAD_FIGHT")
                 dead.append((ag, action, 0, 0, px, py))
+            if ag is highlight:
+                mark = (px, py)
 
-        # Cadáveres debajo de las vivas
         anim = self.A.anim
-        for group in (dead, alive):
+        for group in (dead, alive):                   # cadáveres debajo de las vivas
             blits = []
             for ag, act, carry, k, px, py in group:
                 key = (ag.CASTE, act, carry, DIR_INDEX[ag.facing])
-                if key not in anim:                       # sin arte para esa carga/acción: usa la sin carga
+                if key not in anim:                   # sin arte para esa carga/acción: usa la sin carga
                     key = (ag.CASTE, act, 0, DIR_INDEX[ag.facing])
                 blits.append((sp[anim[key][k]], (px, py)))
             surf.blits(blits)
+
+        if mark is not None:
+            pygame.draw.rect(surf, (255, 220, 90), (mark[0] - 2, mark[1] - 2, T + 4, T + 4), 2, border_radius=6)

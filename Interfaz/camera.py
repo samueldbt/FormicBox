@@ -54,6 +54,13 @@ class Camera:
         x1 = min(self.map_w, (self.x + self.view_w) // T + 1)
         y1 = min(self.map_h, (self.y + self.view_h) // T + 1)
         return x0, y0, x1, y1
+    
+    def center_cell(self):
+        """Celda (fila, columna) en el centro de la vista."""
+        T = config.TILE
+        cx = int((self.x + self.view_w / 2) // T)
+        cy = int((self.y + self.view_h / 2) // T)
+        return min(max(cy, 0), self.map_h - 1), min(max(cx, 0), self.map_w - 1)
 
     def screen_to_cell(self, sx, sy):
         """Píxel de la vista -> (fila, columna), o None si cae fuera del mapa."""
