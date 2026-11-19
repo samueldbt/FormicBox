@@ -8,7 +8,9 @@ FormicBox simula una colonia de hormigas cortadoras de hojas en un mapa 2D discr
 
 > **Nota de alcance:** la biología de referencia son las hormigas cortadoras de hojas (*Atta* spp.), con elementos culturales de la hormiga culona santandereana. Las castas (obreras y soldadas) corresponden funcionalmente a *Atta*; la **marabunta** es un enemigo inspirado en *Nomamyrmex esenbeckii*.
 
-El diseño completo (fundamento biológico, reglas formales, fórmulas y parámetros) está en el [**Documento técnico**](./FormicBox_Documento_Tecnico.docx).
+El diseño completo (fundamento biológico, reglas formales, fórmulas y parámetros) está en el [**Documento técnico**](./Entregables/Documento_técnico.docx) y en (./Entregables/Definición_formal.pdf)
+
+El video explicativo está en el sig link https://youtu.be/P4ZoPLfAFT0 
 
 ---
 
